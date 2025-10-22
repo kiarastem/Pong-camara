@@ -1,0 +1,71 @@
+# Archivo: settings.py - Configuracion del juego Hand Pong (Feria)
+# ASCII puro
+
+import cv2
+
+# --- Pantalla ---
+SCREEN_WIDTH = 1920
+SCREEN_HEIGHT = 1080
+FULLSCREEN = True
+
+# --- Estados del juego ---
+MENU = 0
+PLAYING = 1
+PAUSED = 2
+GAME_OVER = 3
+
+# --- Palas y pelota ---
+PADDLE_WIDTH = 28
+PADDLE_HEIGHT = 180
+BALL_RADIUS = 16
+
+# --- Marcador y fin de ronda ---
+WINNING_SCORE = 3
+ROUND_DURATION_SEC = 90
+
+# --- Colores (BGR) ---
+PADDLE_L_COLOR = (255, 150, 60)
+PADDLE_R_COLOR = (80, 180, 255)
+BALL_COLOR = (255, 255, 255)
+EDU_PANEL_BG = (25, 25, 25)
+EDU_TEXT_COLOR = (200, 255, 200)
+
+# --- Tipografia ---
+FONT = cv2.FONT_HERSHEY_SIMPLEX
+FONT_SCALE_SCORE = 2.4
+FONT_THICKNESS_SCORE = 4
+
+# --- IA base y adaptativa ---
+INITIAL_AI_REACTIVITY = 0.020
+AI_REACTIVITY_PER_MIN = 0.035
+AI_RAMP_MINUTES = 3.0
+AI_PADDLE_MAX_SPEED = 22
+
+AI_ADAPT_ERR_MIN = 0.05
+AI_ADAPT_ERR_MAX = 0.35
+AI_ADAPT_REACT_MIN = 0.020
+AI_ADAPT_REACT_MAX = 0.040
+
+# --- Pelota dinamica ---
+INITIAL_BALL_SPEED = 10.0
+BALL_MIN_SPEED = 7.0
+BALL_MAX_SPEED = 24.0
+BALL_SPEED_HIT_BOOST = 0.06
+BALL_SPIN_GAIN = 5.0
+BALL_NOISE_Y = 1.2
+
+# --- Deteccion de mano ---
+DETECTION_CONFIDENCE = 0.6
+TRACKING_CONFIDENCE = 0.5
+HAND_DEADZONE_PX = 10
+HAND_EMA_ALPHA = 0.35
+
+# --- Calidad de juego ---
+FPS_CAP = 60
+SERVE_COUNTDOWN_SEC = 1.2
+COLLISION_FORGIVENESS = 8
+
+# --- UI opcional ---
+SHOW_HAND_SKELETON = True
+EDUCATIONAL_MODE = True
+EDU_PANEL_ALPHA = 0.7
