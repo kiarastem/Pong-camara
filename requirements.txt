@@ -1,4 +1,5 @@
-opencv-python==4.10.0.84
-numpy==1.26.4
+numpy>=1.24.0,<1.27
+opencv-python>=4.7.0
 mediapipe==0.10.14
-pygame==2.5.2
+protobuf<5,>=3.20.0
+imgaug>=0.4.0

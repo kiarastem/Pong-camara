@@ -1,5 +1,5 @@
-# Archivo: main.py - Hand Pong (cv2 + camara + IA humana) VERSION MODULAR
-# El texto respeta ASCII (sin acentos en el codigo).
+# Archivo: main.py - Hand Pong (cv2 + camara + IA humana)
+# ASCII puro (sin acentos en el codigo)
 
 import time
 import cv2
@@ -12,83 +12,64 @@ from opponent_model import OpponentModel
 from ui_manager import UIManager
 from effects_manager import EffectsManager
 
-WINDOW_NAME = "Hand Pong"
-RNG = np.random.default_rng(int(time.time() * 1000) % (2**32))  # RNG con semilla temporal
+
+class AISkillManager:
+    def __init__(self):
+        self.elapsed = 0.0
+
+    def reset(self):
+        self.elapsed = 0.0
+
+    def update(self, dt, scores):
+        self.elapsed += max(0.0, dt)
+        start = settings.AI_SKILL_START
+        end = settings.AI_SKILL_END
+        t = np.clip(self.elapsed / max(1.0, settings.AI_TIME_TO_SKILL), 0.0, 1.0)
+        diff = scores[1] - scores[0]  # jugador - IA
+        s = np.clip((diff + 3) / 6.0, 0.0, 1.0)
+        blend = np.clip(0.4 * t + 0.6 * s, 0.0, 1.0)
+        cur = {}
+        for k in start:
+            cur[k] = float(start[k] + (end.get(k, start[k]) - start[k]) * blend)
+        cur["blend"] = float(blend)
+        return cur
 
 
-# ------------------------------------------------------------
-# Utilidades
-# ------------------------------------------------------------
-def fast_blur_bgr(frame, scale=0.4, ksize=9):
-    """Desenfoque rapido para el fondo (barato en GPU/CPU)."""
-    small = cv2.resize(frame, (0, 0), fx=scale, fy=scale)
+def fast_blur_bgr(frame, scale=0.35, ksize=9):
+    small = cv2.resize(frame, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
     small = cv2.GaussianBlur(small, (ksize | 1, ksize | 1), 0)
-    return cv2.resize(small, (frame.shape[1], frame.shape[0]))
+    return cv2.resize(small, (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_LINEAR)
 
 
 def init_video_and_window():
-    """Inicializa camara y ventana a pantalla completa si corresponde."""
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         print("Error: no se pudo acceder a la camara.")
         return None
-    cv2.namedWindow(WINDOW_NAME, cv2.WND_PROP_FULLSCREEN)
+    cv2.namedWindow(settings.WINDOW_NAME, cv2.WND_PROP_FULLSCREEN)
     if settings.FULLSCREEN:
-        cv2.setWindowProperty(WINDOW_NAME, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+        cv2.setWindowProperty(settings.WINDOW_NAME, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
     return cap
 
 
-def adaptive_ai_params(scores):
-    """
-    Ajuste dinamico de reactividad y error segun marcador.
-    scores: [ia, jugador]
-    """
-    diff = int(scores[1] - scores[0])  # jugador - IA
-    t = np.clip((diff + 3) / 6.0, 0.0, 1.0)
-    err = (1 - t) * settings.AI_ADAPT_ERR_MIN + t * settings.AI_ADAPT_ERR_MAX
-    react = (1 - t) * settings.AI_ADAPT_REACT_MAX + t * settings.AI_ADAPT_REACT_MIN
-    return float(react), float(err)
+def compute_reactivity(scores, blend):
+    diff = scores[1] - scores[0]  # jugador - IA
+    base = 0.045 + 0.015 * np.clip(diff, -3, 3)
+    boost = 0.04 * blend
+    return float(np.clip(base + boost, 0.02, 0.18))
 
 
-def handle_controls(key, state):
-    """
-    Teclas: ESC, R, ESPACIO/I
-    state: dict con llaves 'scores', 'ball', 'round_start', 'show_edu'
-    """
-    if key == 27:  # ESC
-        state["running"] = False
-    elif key == ord("r"):
-        state["scores"] = [0, 0]
-        state["ball"].reset()
-        state["round_start"] = time.time()
-        # reinicia saque
-        state["serving"] = True
-        state["serve_time"] = time.time() + settings.SERVE_COUNTDOWN_SEC
-        state["next_direction"] = 1 if RNG.random() > 0.5 else -1
-    elif key == ord(" ") or key == ord("i"):
-        state["show_edu"] = not state["show_edu"]
-    return state
-
-
-def capture_and_prepare_frame(cap):
+def capture_frame(cap):
     ret, frame = cap.read()
     if not ret:
         return None, None
     frame = cv2.flip(frame, 1)
     frame = cv2.resize(frame, (settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
-    bg = fast_blur_bgr(frame, 0.4, 9)
+    bg = fast_blur_bgr(frame)
     return frame, bg
 
 
-def update_tips(state):
-    """Rota mensajes educativos cada 6s."""
-    if time.time() - state["tip_t"] > 6.0:
-        state["tip_t"] = time.time()
-        state["tip_i"] = (state["tip_i"] + 1) % len(state["tips"])
-
-
-def do_serve_if_needed(state, ui):
-    """Cuenta regresiva y pone la pelota en juego cuando corresponda."""
+def do_serve(state, ui):
     if not state["serving"]:
         return
     secs = state["serve_time"] - time.time()
@@ -99,49 +80,43 @@ def do_serve_if_needed(state, ui):
         state["ball"].reset(direction=state["next_direction"])
 
 
-def update_player_from_hand(detector, frame, player):
-    """Actualiza paleta jugador con la deteccion de mano."""
-    y_hand, landmarks, _ = detector.process(frame)
-    if settings.SHOW_HAND_SKELETON and landmarks is not None:
-        detector.draw_skeleton(frame, landmarks)
-    if y_hand is not None:
-        player.update(y_hand)
-    return y_hand
+def update_ticker(state):
+    now = time.time()
+    if now - state["tip_time"] > settings.TICKER_INTERVAL:
+        state["tip_time"] = now
+        state["tip_index"] = (state["tip_index"] + 1) % len(state["tips"])
 
 
-def update_ai_and_ball(state, ai_model, ai_paddle, player_paddle, fx, ui, dt):
-    """Actualiza logica: pelota, colisiones, IA (prediccion + PD) y puntuacion."""
+def update_ai_logic(state, ai_model, ai_paddle, player_paddle, fx, ui, dt, skill_manager):
     ball = state["ball"]
     scores = state["scores"]
 
-    # parametros IA adaptativos
-    ai_react, ai_err = adaptive_ai_params(scores)
+    skill = skill_manager.update(dt, scores)
+    ai_model.set_skill(**{k: v for k, v in skill.items() if k in {"miss_base", "lat_ms", "decision_hz", "sacc_amp_px"}})
 
-    # pelota
     ball.update(dt)
-    events = ball.check_collisions(ai_paddle, player_paddle, dt=dt)
-    for e in events:
-        if e[0] == "hit":
-            x, y, side = e[1], e[2], e[3]
+    events = ball.check_collisions(ai_paddle, player_paddle)
+    for evt in events:
+        tag, x, y, side = evt
+        if tag == "hit":
             ui.spawn_hit_ring(x, y)
             fx.spawn_particles(x, y, (255, 255, 255))
-            if side == "player":
-                fx.flash_paddle(player_paddle.x, player_paddle.y, player_paddle.width, player_paddle.height, color=player_paddle.color)
-            else:
-                fx.flash_paddle(ai_paddle.x, ai_paddle.y, ai_paddle.width, ai_paddle.height, color=ai_paddle.color)
+            p = player_paddle if side == "player" else ai_paddle
+            fx.flash_paddle(p.x, p.y, p.width, p.height, p.color)
 
-    # IA: decide objetivo y avanza PD
-    y_target, _ = ai_model.think(ball, ai_paddle, scores, dt)
+    target_y, info = ai_model.think(ball, ai_paddle, scores, dt)
+    reactivity = compute_reactivity(scores, skill["blend"])
+    ai_paddle.update(reactivity, target_y, dt, np.hypot(ball.vx, ball.vy))
 
-    # si ya esta cerca, baja reactividad para estabilizar
-    err_pix = abs((ai_paddle.y + ai_paddle.height / 2.0) - y_target)
-    k = float(np.clip(1.0 - (err_pix / 220.0), 0.0, 1.0))
-    ai_react = ai_react * (0.85 + 0.30 * k)
+    telemetry = {
+        "ball_speed": float(np.hypot(ball.vx, ball.vy)),
+        "p_miss": float(info.get("p_miss", skill.get("miss_base", 0.0))),
+        "lat_ms": float(info.get("lat_ms", skill.get("lat_ms", settings.AI_LATENCY_MS))),
+        "decision_hz": float(skill.get("decision_hz", settings.AI_DECISION_RATE_HZ)),
+    }
+    state["telemetry"] = telemetry
 
-    ai_paddle.target_y = y_target
-    ai_paddle.update(ball, reactivity=ai_react, boost=1.0, error_rate=ai_err, dt=dt)
-
-    # puntuacion y reinicio de saque
+    # puntos
     if ball.x + ball.radius < 0:
         scores[1] += 1
         ui.flash_color((0, 200, 0))
@@ -149,6 +124,7 @@ def update_ai_and_ball(state, ai_model, ai_paddle, player_paddle, fx, ui, dt):
         state["serving"] = True
         state["serve_time"] = time.time() + settings.SERVE_COUNTDOWN_SEC
         state["next_direction"] = 1
+        skill_manager.reset()
     elif ball.x - ball.radius > settings.SCREEN_WIDTH:
         scores[0] += 1
         ui.flash_color((200, 0, 0))
@@ -156,48 +132,116 @@ def update_ai_and_ball(state, ai_model, ai_paddle, player_paddle, fx, ui, dt):
         state["serving"] = True
         state["serve_time"] = time.time() + settings.SERVE_COUNTDOWN_SEC
         state["next_direction"] = -1
+        skill_manager.reset()
 
 
-def render_scene(state, ui, fx, ai_model, ai_paddle, player_paddle, ball):
-    """Dibuja todos los elementos en el frame de salida."""
-    bg = state["bg"]
+def render(state, ui, fx, ai_model, ai_paddle, player_paddle):
+    frame = state["bg"].copy()
 
-    # linea educativa de prediccion
-    if not state["serving"] and settings.EDUCATIONAL_MODE and state["show_pred"]:
-        y_pred_draw = ai_model.get_last_clean_prediction_y()
+    if settings.EDUCATIONAL_MODE and state["show_prediction"] and not state["serving"]:
+        y_pred = ai_model.get_last_clean_prediction_y()
         x0 = int(ai_paddle.x + ai_paddle.width)
-        cv2.line(bg, (x0, int(y_pred_draw)), (x0 + 60, int(y_pred_draw)), (0, 255, 0), 2)
+        cv2.line(frame, (x0, int(y_pred)), (x0 + 60, int(y_pred)), (0, 255, 0), 2)
 
-    # objetos
-    ai_paddle.draw(bg)
-    player_paddle.draw(bg)
-    ball.draw(bg)
+    ai_paddle.draw(frame)
+    player_paddle.draw(frame)
+    state["ball"].draw(frame)
 
-    # UI y FX
-    ui.draw_score(bg, state["scores"])
-    fx.draw(bg)
-    if state["show_edu"] and state["tips"]:
-        ui.draw_edu_panel(bg, state["tips"][state["tip_i"]])
+    ui.draw_score(frame, state["scores"])
+    fx.draw(frame)
 
-    # mostrar
-    cv2.imshow(WINDOW_NAME, bg)
+    if state["show_hud"]:
+        tuning = {
+            "AI_PADDLE_MAX_SPEED": state["tuning"]["AI_PADDLE_MAX_SPEED"],
+            "AI_D_GAIN": state["tuning"]["AI_D_GAIN"],
+            "AI_DEADBAND_PX": state["tuning"]["AI_DEADBAND_PX"],
+            "AI_MAX_ACCEL": state["tuning"]["AI_MAX_ACCEL"],
+        }
+        ui.draw_hud(frame, state.get("telemetry"), tuning)
+
+    if state["show_edu"]:
+        ui.draw_edu_panel(frame, state["tips"][state["tip_index"]])
+    else:
+        ui.draw_ticker(frame, state["tips"][state["tip_index"]])
+
+    cv2.imshow(settings.WINDOW_NAME, frame)
 
 
-def check_round_end_and_reset(state):
-    """Comprueba fin de ronda por tiempo o marcador y resetea si corresponde."""
-    time_up = (time.time() - state["round_start"]) > settings.ROUND_DURATION_SEC
-    reached = any(s >= settings.WINNING_SCORE for s in state["scores"])
-    if not (time_up or reached):
+def handle_controls(key, state, detector):
+    # salir
+    if key == 27:
+        state["running"] = False
         return
+
+    # reset
+    if key == ord("r"):
+        state["scores"] = [0, 0]
+        state["serving"] = True
+        state["serve_time"] = time.time() + settings.SERVE_COUNTDOWN_SEC
+        state["next_direction"] = 1
+        state["round_start"] = time.time()
+        state["ball"].reset(direction=1)
+        return
+
+    # toggles
+    if key in (ord(" "), ord("i")):
+        state["show_edu"] = not state["show_edu"]
+    if key == ord("h"):
+        state["show_hud"] = not state["show_hud"]
+    if key == ord("l"):
+        state["show_prediction"] = not state["show_prediction"]
+    if key == ord("k"):
+        state["show_skeleton"] = not state["show_skeleton"]
+    if key == ord("c"):
+        detector.calibrate_center()
+
+    # tuning en vivo (Q/A, W/S, E/D, Z/X)
+    step_speed = 80.0
+    step_acc = 200.0
+    step_dead = 1.0
+    step_d = 0.01
+
+    if key == ord("q"):
+        state["tuning"]["AI_PADDLE_MAX_SPEED"] = max(600.0, state["tuning"]["AI_PADDLE_MAX_SPEED"] - step_speed)
+    if key == ord("a"):
+        state["tuning"]["AI_PADDLE_MAX_SPEED"] = min(3200.0, state["tuning"]["AI_PADDLE_MAX_SPEED"] + step_speed)
+
+    if key == ord("w"):
+        state["tuning"]["AI_D_GAIN"] = max(0.0, state["tuning"]["AI_D_GAIN"] - step_d)
+    if key == ord("s"):
+        state["tuning"]["AI_D_GAIN"] = min(1.0, state["tuning"]["AI_D_GAIN"] + step_d)
+
+    if key == ord("e"):
+        state["tuning"]["AI_DEADBAND_PX"] = max(0.0, state["tuning"]["AI_DEADBAND_PX"] - step_dead)
+    if key == ord("d"):
+        state["tuning"]["AI_DEADBAND_PX"] = min(40.0, state["tuning"]["AI_DEADBAND_PX"] + step_dead)
+
+    if key == ord("z"):
+        state["tuning"]["AI_MAX_ACCEL"] = max(800.0, state["tuning"]["AI_MAX_ACCEL"] - step_acc)
+    if key == ord("x"):
+        state["tuning"]["AI_MAX_ACCEL"] = min(9000.0, state["tuning"]["AI_MAX_ACCEL"] + step_acc)
+
+
+def check_round_end(state):
+    time_up = (time.time() - state["round_start"]) > settings.ROUND_DURATION_SEC
+    reach_score = any(score >= settings.WINNING_SCORE for score in state["scores"])
+    if not (time_up or reach_score):
+        return False
 
     winner = "IA" if state["scores"][0] > state["scores"][1] else "Jugador"
     msg = f"Ganador: {winner}"
+    frame = state["bg"].copy()
     cv2.putText(
-        state["bg"], msg,
-        (int(settings.SCREEN_WIDTH * 0.32), int(settings.SCREEN_HEIGHT * 0.5)),
-        settings.FONT, 2, (255, 255, 255), 4, cv2.LINE_AA
+        frame,
+        msg,
+        (int(settings.SCREEN_WIDTH * 0.32), int(settings.SCREEN_HEIGHT * 0.52)),
+        settings.FONT,
+        2.2,
+        (255, 255, 255),
+        5,
+        cv2.LINE_AA,
     )
-    cv2.imshow(WINDOW_NAME, state["bg"])
+    cv2.imshow(settings.WINDOW_NAME, frame)
     cv2.waitKey(1200)
 
     # reset
@@ -205,92 +249,97 @@ def check_round_end_and_reset(state):
     state["serving"] = True
     state["serve_time"] = time.time() + settings.SERVE_COUNTDOWN_SEC
     state["round_start"] = time.time()
-    state["next_direction"] = 1 if RNG.random() > 0.5 else -1
+    state["next_direction"] = 1
+    state["ball"].reset(direction=1)
+    return True
 
 
-# ------------------------------------------------------------
-# Programa principal
-# ------------------------------------------------------------
 def main():
     print("Iniciando Hand Pong...")
     cap = init_video_and_window()
     if cap is None:
         return
 
-    # instancias
     detector = HandDetector()
     ui = UIManager()
     fx = EffectsManager()
     ai_model = OpponentModel()
     ball = Ball()
-    player = PlayerPaddle(
-        x_pos=settings.SCREEN_WIDTH - settings.PADDLE_WIDTH - 60,
-        color=settings.PADDLE_R_COLOR,
-    )
+    player = PlayerPaddle(x_pos=settings.SCREEN_WIDTH - settings.PADDLE_WIDTH - 60, color=settings.PADDLE_R_COLOR)
     ai = AIPaddle(x_pos=60, color=settings.PADDLE_L_COLOR)
+    skill_manager = AISkillManager()
 
-    # estado del juego
     state = {
         "running": True,
-        "scores": [0, 0],          # [IA, Jugador]
+        "scores": [0, 0],
         "serving": True,
         "serve_time": time.time() + settings.SERVE_COUNTDOWN_SEC,
-        "round_start": time.time(),
         "next_direction": 1,
-        "show_edu": True,
-        "show_pred": settings.EDUCATIONAL_MODE,
-        "tips": [
-            "La camara ve tu mano y la convierte en coordenadas.",
-            "La IA predice donde golpeara la pelota.",
-            "La IA comete errores al inicio y los reduce.",
-            "Cada golpe acelera ligeramente la pelota.",
-            "Tu mano controla la paleta derecha.",
-        ],
-        "tip_i": 0,
-        "tip_t": time.time(),
+        "round_start": time.time(),
         "ball": ball,
+        "show_edu": True,
+        "show_hud": settings.HUD_VISIBLE,
+        "show_prediction": settings.EDUCATIONAL_MODE,
+        "show_skeleton": settings.SHOW_HAND_SKELETON,
+        "tips": [
+            "La camara sigue la altura de tu mano en tiempo real.",
+            "La IA predice rebotes y corrige con retraso humano.",
+            "Cada golpe agrega spin y acelera un poco la pelota.",
+            "El HUD muestra velocidad, error esperado y latencia.",
+            "La IA aprende mas rapido si el jugador toma ventaja.",
+        ],
+        "tip_index": 0,
+        "tip_time": time.time(),
+        "telemetry": None,
+        "tuning": {
+            "AI_PADDLE_MAX_SPEED": float(settings.AI_PADDLE_MAX_SPEED),
+            "AI_D_GAIN": float(settings.AI_D_GAIN),
+            "AI_DEADBAND_PX": float(settings.AI_DEADBAND_PX),
+            "AI_MAX_ACCEL": float(settings.AI_MAX_ACCEL),
+        },
     }
 
-    fps_cap = int(getattr(settings, "FPS_CAP", 60))
-    frame_delay = 1.0 / max(30, fps_cap)
-
+    fps_cap = max(30, getattr(settings, "FPS_CAP", 60))
+    frame_delay = 1.0 / fps_cap
     prev_t = time.perf_counter()
 
     while state["running"]:
-        loop_t = time.perf_counter()
-        dt = loop_t - prev_t
-        prev_t = loop_t
-        if dt > 0.05:
-            dt = 0.05
-
-        # frame
-        frame, bg = capture_and_prepare_frame(cap)
+        frame, bg = capture_frame(cap)
         if frame is None:
             print("Error: no se recibe video de la camara.")
             break
-        state["bg"] = bg  # guardar referencia para funciones que dibujan
+        state["bg"] = bg
 
-        # UI: cuenta regresiva de saque
+        loop_t = time.perf_counter()
+        dt = loop_t - prev_t
+        prev_t = loop_t
+        dt = min(dt, 0.05)
+
+        # aplicar tuning en runtime
+        settings.AI_PADDLE_MAX_SPEED = state["tuning"]["AI_PADDLE_MAX_SPEED"]
+        settings.AI_D_GAIN = state["tuning"]["AI_D_GAIN"]
+        settings.AI_DEADBAND_PX = state["tuning"]["AI_DEADBAND_PX"]
+        settings.AI_MAX_ACCEL = state["tuning"]["AI_MAX_ACCEL"]
+
         if state["serving"]:
-            do_serve_if_needed(state, ui)
+            do_serve(state, ui)
         else:
-            # deteccion de mano y movimiento jugador
-            update_player_from_hand(detector, frame, player)
-            # logica de IA y pelota
-            update_ai_and_ball(state, ai_model, ai, player, fx, ui, dt)
+            y_hand, landmarks, valid = detector.process(frame, dt)
+            if state["show_skeleton"] and valid:
+                detector.draw_skeleton(frame, landmarks)
+            player.update(y_hand)
+            update_ai_logic(state, ai_model, ai, player, fx, ui, dt, skill_manager)
 
-        # rotacion de mensajes
-        update_tips(state)
+        update_ticker(state)
+        render(state, ui, fx, ai_model, ai, player)
 
-        # render y controles
-        render_scene(state, ui, fx, ai_model, ai, player, ball)
         key = cv2.waitKey(1) & 0xFF
-        state = handle_controls(key, state)
+        if key != 255:
+            handle_controls(key, state, detector)
 
-        # fin de ronda
-        check_round_end_and_reset(state)
+        if check_round_end(state):
+            skill_manager.reset()
 
-        # limitar FPS
         spent = time.time() - loop_t
         wait = frame_delay - spent
         if wait > 0:
