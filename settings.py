@@ -1,71 +1,70 @@
-# Archivo: settings.py - Configuracion del juego Hand Pong (Feria)
+# Archivo: settings.py
+# Configuracion general del juego (Hand Pong)
 # ASCII puro
 
 import cv2
 
-# --- Pantalla ---
+# ---------- Ventana ----------
 SCREEN_WIDTH = 1920
 SCREEN_HEIGHT = 1080
 FULLSCREEN = True
 
-# --- Estados del juego ---
-MENU = 0
-PLAYING = 1
-PAUSED = 2
-GAME_OVER = 3
-
-# --- Palas y pelota ---
-PADDLE_WIDTH = 28
-PADDLE_HEIGHT = 180
-BALL_RADIUS = 16
-
-# --- Marcador y fin de ronda ---
-WINNING_SCORE = 3
-ROUND_DURATION_SEC = 90
-
-# --- Colores (BGR) ---
-PADDLE_L_COLOR = (255, 150, 60)
-PADDLE_R_COLOR = (80, 180, 255)
+# ---------- Pelota ----------
+BALL_RADIUS = 14
 BALL_COLOR = (255, 255, 255)
-EDU_PANEL_BG = (25, 25, 25)
-EDU_TEXT_COLOR = (200, 255, 200)
+BALL_BASE_SPEED = 480.0
+BALL_SPEED_X = 480.0
+BALL_SPEED_Y = 380.0
+BALL_SPEED_INC = 0.65
+BALL_SPEED_MAX = 1300.0
 
-# --- Tipografia ---
-FONT = cv2.FONT_HERSHEY_SIMPLEX
-FONT_SCALE_SCORE = 2.4
-FONT_THICKNESS_SCORE = 4
+# ---------- Paletas ----------
+PADDLE_WIDTH = 22
+PADDLE_HEIGHT = 180
+PADDLE_R_COLOR = (0, 200, 0)
+PADDLE_L_COLOR = (0, 100, 255)
+AI_PADDLE_MAX_SPEED = 2000.0
 
-# --- IA base y adaptativa ---
-INITIAL_AI_REACTIVITY = 0.020
-AI_REACTIVITY_PER_MIN = 0.035
-AI_RAMP_MINUTES = 3.0
-AI_PADDLE_MAX_SPEED = 22
+# ---------- IA humana ----------
+AI_DECISION_RATE_HZ = 14.0
+AI_LATENCY_MS = 90.0
+AI_LATENCY_JITTER_MS = 25.0
+AI_SACCADE_AMP_PX = 26.0
+AI_MISS_PROB_BASE = 0.05
+AI_MISS_PROB_MAX = 0.45
+AI_SPEED_FOR_MAX_MISS = 1400.0
+AI_D_GAIN = 0.22
+AI_DEADBAND_PX = 10.0
+AI_MAX_ACCEL = 4800.0
 
+# ---------- Adaptacion dinamica ----------
 AI_ADAPT_ERR_MIN = 0.05
-AI_ADAPT_ERR_MAX = 0.35
-AI_ADAPT_REACT_MIN = 0.020
-AI_ADAPT_REACT_MAX = 0.040
+AI_ADAPT_ERR_MAX = 0.40
+AI_ADAPT_REACT_MIN = 0.03
+AI_ADAPT_REACT_MAX = 0.12
 
-# --- Pelota dinamica ---
-INITIAL_BALL_SPEED = 10.0
-BALL_MIN_SPEED = 7.0
-BALL_MAX_SPEED = 24.0
-BALL_SPEED_HIT_BOOST = 0.06
-BALL_SPIN_GAIN = 5.0
-BALL_NOISE_Y = 1.2
-
-# --- Deteccion de mano ---
-DETECTION_CONFIDENCE = 0.6
-TRACKING_CONFIDENCE = 0.5
-HAND_DEADZONE_PX = 10
-HAND_EMA_ALPHA = 0.35
-
-# --- Calidad de juego ---
+# ---------- Juego ----------
+SERVE_COUNTDOWN_SEC = 2.0
+ROUND_DURATION_SEC = 45.0
+WINNING_SCORE = 5
 FPS_CAP = 60
-SERVE_COUNTDOWN_SEC = 1.2
-COLLISION_FORGIVENESS = 8
 
-# --- UI opcional ---
-SHOW_HAND_SKELETON = True
+# ---------- Fuente ----------
+FONT = cv2.FONT_HERSHEY_SIMPLEX
+FONT_SCALE_SCORE = 2.0
+FONT_THICKNESS_SCORE = 3
+
+# ---------- Interfaz educativa ----------
 EDUCATIONAL_MODE = True
-EDU_PANEL_ALPHA = 0.7
+EDU_PANEL_BG = (0, 0, 0)
+EDU_PANEL_ALPHA = 0.55
+EDU_TEXT_COLOR = (230, 255, 230)
+SHOW_HAND_SKELETON = False
+
+# ---------- Visual FX ----------
+RING_FADE_TIME = 0.4
+FLASH_DECAY_RATE = 0.05
+PARTICLE_LIFE = 0.6
+PARTICLE_COUNT = 10
+PARTICLE_SPEED = 250.0
+PARTICLE_COLOR = (255, 255, 255)
