@@ -1,182 +1,154 @@
-# Archivo: game_objects.py
-# Logica de objetos (pelota, paletas, colisiones)
-# ASCII puro
+# game_objects.py
+# Version educativa y optimizada para feria
 
 import cv2
-import numpy as np
+import random
 import time
 import settings
 
 
-# ---------- Pelota ----------
-class Ball:
-    def __init__(self):
-        self.radius = settings.BALL_RADIUS
-        self.color = settings.BALL_COLOR
-        # use a Generator for reproducible, modern random API
-        seed = int(time.time() * 1000) % (2**32)
-        self._rng = np.random.default_rng(seed)
-        self.reset(direction=1)
-
-    def reset(self, direction=1):
-        self.x = settings.SCREEN_WIDTH / 2.0
-        self.y = settings.SCREEN_HEIGHT / 2.0
-        # initialize base speed and direction-consistent velocity components
-        self.speed = settings.BALL_BASE_SPEED
-        dir_x = float(direction)
-        # pick vertical sign randomly
-        dir_y = float(self._rng.choice([-1.0, 1.0]))
-        # start with a velocity proportional to speed but respecting configured base components
-        # keep initial vx/vy proportional to settings' base speeds but scale to match self.speed
-        base_vx = abs(settings.BALL_SPEED_X)
-        base_vy = abs(settings.BALL_SPEED_Y)
-        # avoid division by zero
-        if base_vx <= 0 and base_vy <= 0:
-            self.vx = dir_x * self.speed
-            self.vy = dir_y * 0.0
-        else:
-            # compute ratio and set vx/vy so that hypot(vx,vy) approximates self.speed
-            ratio = base_vy / max(base_vx, 1.0)
-            vy = min(settings.BALL_SPIN_CLAMP, self.speed * (ratio / (1.0 + ratio)))
-            vx = max(1e-3, np.sqrt(max(0.0, self.speed * self.speed - vy * vy)))
-            self.vx = dir_x * vx
-            self.vy = dir_y * vy
-
-    def update(self, dt):
-        dt = max(0.0, float(dt))
-        self.x += self.vx * dt
-        self.y += self.vy * dt
-
-        # rebote vertical
-        if self.y - self.radius <= 0.0:
-            self.y = self.radius
-            self.vy = abs(self.vy)
-        elif self.y + self.radius >= settings.SCREEN_HEIGHT:
-            self.y = settings.SCREEN_HEIGHT - self.radius
-            self.vy = -abs(self.vy)
-
-    def _apply_spin(self, paddle, contact_y):
-        rel = ((contact_y - (paddle.y + paddle.height / 2.0)) / (paddle.height / 2.0))
-        rel = np.clip(rel, -1.0, 1.0)
-        spin = rel * settings.BALL_SPIN_FACTOR
-        self.vy = float(np.clip(self.vy + spin, -settings.BALL_SPIN_CLAMP, settings.BALL_SPIN_CLAMP))
-
-    def check_collisions(self, ai_paddle, player_paddle):
-        events = []
-
-        # colision con paleta IA (izquierda)
-        if self.vx < 0:
-            p = ai_paddle
-            if (p.x <= self.x - self.radius <= p.x + p.width) and (p.y <= self.y <= p.y + p.height):
-                # reposition outside paddle to avoid double-collision
-                self.x = p.x + p.width + self.radius
-                # increase speed on hit (discrete increment)
-                self.speed = min(settings.BALL_SPEED_MAX, self.speed + settings.BALL_SPEED_INC)
-                # apply spin based on contact point
-                self._apply_spin(p, self.y)
-                # recompute velocity components preserving direction and proportionality
-                dir_x = 1.0
-                vy_ratio = np.clip(abs(self.vy) / max(abs(self.vx), 1.0), 0.35, 2.0)
-                self.vx = dir_x * self.speed
-                self.vy = np.sign(self.vy) * min(settings.BALL_SPIN_CLAMP, self.speed * vy_ratio)
-                events.append(("hit", self.x, self.y, "ai"))
-
-        # colision con paleta Jugador (derecha)
-        if self.vx > 0:
-            p = player_paddle
-            if (p.x <= self.x + self.radius <= p.x + p.width) and (p.y <= self.y <= p.y + p.height):
-                # reposition outside paddle to avoid double-collision
-                self.x = p.x - self.radius
-                # increase speed on hit
-                self.speed = min(settings.BALL_SPEED_MAX, self.speed + settings.BALL_SPEED_INC)
-                # apply spin
-                self._apply_spin(p, self.y)
-                dir_x = -1.0
-                vy_ratio = np.clip(abs(self.vy) / max(abs(self.vx), 1.0), 0.35, 2.0)
-                self.vx = dir_x * self.speed
-                self.vy = np.sign(self.vy) * min(settings.BALL_SPIN_CLAMP, self.speed * vy_ratio)
-                events.append(("hit", self.x, self.y, "player"))
-
-        return events
-
-    def draw(self, frame):
-        cv2.circle(frame, (int(self.x), int(self.y)), self.radius, self.color, -1)
+def clamp(value, min_value, max_value):
+    return max(min_value, min(value, max_value))
 
 
-# ---------- Clase base Paleta ----------
 class Paddle:
-    def __init__(self, x_pos, color=(255, 255, 255)):
+    """Clase base para las paletas."""
+    def __init__(self, x_pos, color):
         self.width = settings.PADDLE_WIDTH
         self.height = settings.PADDLE_HEIGHT
-        self.x = float(x_pos)
-        self.y = settings.SCREEN_HEIGHT / 2.0 - self.height / 2.0
-        self.v = 0.0
+        self.x = x_pos
+        self.y = (settings.SCREEN_HEIGHT - self.height) / 2
         self.color = color
 
-    def clamp(self):
-        if self.y < 0.0:
-            self.y = 0.0
-            self.v = 0.0
-        max_y = settings.SCREEN_HEIGHT - self.height
-        if self.y > max_y:
-            self.y = max_y
-            self.v = 0.0
+    def rect(self):
+        return int(self.x), int(self.y), int(self.width), int(self.height)
 
     def draw(self, frame):
-        cv2.rectangle(
-            frame,
-            (int(self.x), int(self.y)),
-            (int(self.x + self.width), int(self.y + self.height)),
-            self.color,
-            -1,
-        )
+        cv2.rectangle(frame, (int(self.x), int(self.y)),
+                      (int(self.x + self.width), int(self.y + self.height)),
+                      self.color, -1)
 
 
-# ---------- Paleta Jugador ----------
 class PlayerPaddle(Paddle):
-    def update(self, y_hand):
-        if y_hand is None:
-            return
-        target = float(y_hand) - self.height / 2.0
-        alpha = float(np.clip(settings.PLAYER_FOLLOW_ALPHA, 0.0, 1.0))
-        self.y += (target - self.y) * alpha
-        self.clamp()
+    """Paleta controlada por la camara (mano del jugador)."""
+    def update(self, y_pos):
+        if y_pos is not None:
+            self.y = y_pos - self.height / 2
+            self.y = clamp(self.y, 0, settings.SCREEN_HEIGHT - self.height)
 
 
-# ---------- Paleta IA ----------
 class AIPaddle(Paddle):
-    def __init__(self, x_pos, color=(255, 0, 0)):
+    """Paleta de IA adaptativa con impulso de proximidad."""
+    def __init__(self, x_pos, color):
         super().__init__(x_pos, color)
-        self.target_y = self.y
+        self._t_prev = time.time()
+        self._err_cd = 0.0
+        self._aim_bias = 0.0
+        self._lat_accum = 0.0
+        self._latency_ms = settings.AI_LATENCY_MS / 1000.0
+        self._last_target_y = self.y + self.height / 2
+        self._noise = 0.0
+        self._err_gain_pen = 1.0
+        self._err_spd_pen = 1.0
+        self.react_gain = 1.0
+        self.max_speed_mult = 1.0
+        self.err_std = 8.0
+        self.rng = random.Random(42)
 
-    def update(self, reactivity, target_y, dt, ball_speed):
-        target = float(np.clip(target_y - self.height / 2.0, 0.0, settings.SCREEN_HEIGHT - self.height))
-        center = self.y
-        err = target - center
+    def center_y(self):
+        return self.y + self.height / 2
 
-        dead = float(getattr(settings, "AI_DEADBAND_PX", 12.0))
-        kd = float(getattr(settings, "AI_D_GAIN", 0.19))
-        kp = float(reactivity)
-        if abs(err) < dead:
-            desired_v = 0.0
+    def update(self, ball, reactivity, speed_boost=1.0, mistake_prob=0.0):
+        now = time.time()
+        dt = max(0.0, min(0.1, now - self._t_prev))
+        self._t_prev = now
+        self._lat_accum += dt
+
+        # errores intencionales
+        if self._err_cd <= 0.0:
+            if self.rng.random() < mistake_prob * dt:
+                self._err_cd = settings.AI_ERROR_WHIF_TIME
+                self._aim_bias = self.rng.normalvariate(0.0, settings.AI_AIM_JITTER_PX)
         else:
-            desired_v = kp * err - kd * self.v
+            self._err_cd = max(0.0, self._err_cd - dt)
 
-        speed_factor = 0.85 + 0.6 * np.clip(ball_speed / 900.0, 0.0, 1.0)
-        max_speed = float(settings.AI_PADDLE_MAX_SPEED) * speed_factor
-        desired_v = float(np.clip(desired_v, -max_speed, max_speed))
+        # actualizar prediccion de posicion
+        if self._lat_accum >= self._latency_ms:
+            self._lat_accum = 0.0
+            target_y = ball.y
+            self._noise = 0.9 * self._noise + 0.1 * self.rng.normalvariate(0.0, self.err_std)
+            target_y += self._noise
+            self._last_target_y = 0.7 * self._last_target_y + 0.3 * (target_y + self._aim_bias)
 
-        max_accel = float(getattr(settings, "AI_MAX_ACCEL", 4300.0))
-        if dt > 0:
-            a_cmd = (desired_v - self.v) / dt
-            a_cmd = float(np.clip(a_cmd, -max_accel, max_accel))
-            self.v += a_cmd * dt
+        # movimiento base
+        delta = self._last_target_y - self.center_y()
 
-        # small nudge: if error is large but velocity is nearly zero, help break static friction
-        if abs(err) > dead and abs(self.v) < 20.0:
-            # add a small velocity in px/s (not scaled by dt)
-            nudge_v = np.sign(err) * min(0.08 * max_speed, 300.0)
-            self.v += nudge_v
+        # boost de proximidad
+        coming = (ball.vel_x < 0 and self.x < settings.SCREEN_WIDTH / 2) or \
+                 (ball.vel_x > 0 and self.x > settings.SCREEN_WIDTH / 2)
+        eps = 1e-6
+        t_me = abs((self.x - ball.x) / (ball.vel_x + eps)) if coming else 999.0
+        t_norm = max(0.0, 1.0 - t_me / 0.8) if t_me < 0.8 else 0.0
+        proximity_gain = 1.0 + 0.9 * t_norm
+        proximity_speed = 1.0 + 0.7 * t_norm
 
-        self.y += self.v * dt
-        self.clamp()
+        gain = reactivity * proximity_gain
+        move = delta * gain
+
+        max_spd = (settings.AI_PADDLE_MAX_SPEED * speed_boost) * proximity_speed
+        move = clamp(move, -max_spd, max_spd)
+        self.y = clamp(self.y + move, 0, settings.SCREEN_HEIGHT - self.height)
+
+
+class Ball:
+    """Pelota con rebotes y aceleracion."""
+    def __init__(self):
+        self.radius = settings.BALL_RADIUS
+        self.reset()
+
+    def reset(self, direction=1, randomize_angle=True):
+        self.x = settings.SCREEN_WIDTH / 2
+        self.y = settings.SCREEN_HEIGHT / 2
+        self.vel_x = settings.INITIAL_BALL_SPEED * direction
+        self.vel_y = random.uniform(-3, 3) if randomize_angle else 0
+        self._events = []
+
+    def update(self):
+        self.x += self.vel_x
+        self.y += self.vel_y
+        if abs(self.vel_x) < settings.BALL_MAX_SPEED:
+            self.vel_x *= 1.0008
+        if abs(self.vel_y) < settings.BALL_MAX_SPEED:
+            self.vel_y *= 1.0005
+
+    def draw(self, frame):
+        cv2.circle(frame, (int(self.x), int(self.y)), self.radius, settings.BALL_COLOR, -1)
+
+    def pop_events(self):
+        ev, self._events = self._events, []
+        return ev
+
+    def check_collisions(self, left_paddle, right_paddle):
+        if self.y - self.radius <= 0 or self.y + self.radius >= settings.SCREEN_HEIGHT:
+            self.vel_y *= -1
+            self._events.append(("wall", self.x, self.y))
+
+        # colision con paleta izquierda
+        if (self.vel_x < 0 and
+            left_paddle.x < self.x - self.radius < left_paddle.x + left_paddle.width and
+            left_paddle.y < self.y < left_paddle.y + left_paddle.height):
+            self._handle_hit(left_paddle)
+
+        # colision con paleta derecha
+        if (self.vel_x > 0 and
+            right_paddle.x < self.x + self.radius < right_paddle.x + right_paddle.width and
+            right_paddle.y < self.y < right_paddle.y + right_paddle.height):
+            self._handle_hit(right_paddle)
+
+        return self._events
+
+    def _handle_hit(self, paddle):
+        self.vel_x *= -1.05
+        offset = (self.y - (paddle.y + paddle.height / 2)) / (paddle.height / 2)
+        self.vel_y += offset * settings.BALL_SPIN_FACTOR
+        self._events.append(("hit", self.x, self.y, "right" if paddle.x > settings.SCREEN_WIDTH / 2 else "left", 1))
