@@ -16,6 +16,9 @@ Thumbs.db
 .idea/
 *.code-workspace
 
+# GitHub workflow/config directory (optional to ignore)
+.github/
+
 # Archivos de sistema
 *.swp
 *.bak

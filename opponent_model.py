@@ -62,7 +62,7 @@ class OpponentModel:
         p = base + 0.55 * p_speed + 0.40 * p_time + p_score
         return float(np.clip(p, base, maxp))
 
-    def _maybe_hesitate(self, now, t_hit, p_miss):
+    def _maybe_hesitate(self, _now, t_hit, p_miss):
         if t_hit is None:
             return False
         base = 0.12
@@ -71,7 +71,7 @@ class OpponentModel:
         p_hes = np.clip(base + boost + miss_factor, 0.0, 0.68)
         return self.rng.random() < p_hes
 
-    def think(self, ball, ai_paddle, scores, dt):
+    def think(self, ball, ai_paddle, scores, _dt):
         now = time.perf_counter()
         if now < self.next_decision_t:
             return self.last_target_y, self.last_info

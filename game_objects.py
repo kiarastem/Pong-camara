@@ -4,6 +4,7 @@
 
 import cv2
 import numpy as np
+import time
 import settings
 
 
@@ -12,14 +13,34 @@ class Ball:
     def __init__(self):
         self.radius = settings.BALL_RADIUS
         self.color = settings.BALL_COLOR
+        # use a Generator for reproducible, modern random API
+        seed = int(time.time() * 1000) % (2**32)
+        self._rng = np.random.default_rng(seed)
         self.reset(direction=1)
 
     def reset(self, direction=1):
         self.x = settings.SCREEN_WIDTH / 2.0
         self.y = settings.SCREEN_HEIGHT / 2.0
-        self.vx = float(direction) * settings.BALL_SPEED_X
-        self.vy = np.random.choice([-1.0, 1.0]) * settings.BALL_SPEED_Y
+        # initialize base speed and direction-consistent velocity components
         self.speed = settings.BALL_BASE_SPEED
+        dir_x = float(direction)
+        # pick vertical sign randomly
+        dir_y = float(self._rng.choice([-1.0, 1.0]))
+        # start with a velocity proportional to speed but respecting configured base components
+        # keep initial vx/vy proportional to settings' base speeds but scale to match self.speed
+        base_vx = abs(settings.BALL_SPEED_X)
+        base_vy = abs(settings.BALL_SPEED_Y)
+        # avoid division by zero
+        if base_vx <= 0 and base_vy <= 0:
+            self.vx = dir_x * self.speed
+            self.vy = dir_y * 0.0
+        else:
+            # compute ratio and set vx/vy so that hypot(vx,vy) approximates self.speed
+            ratio = base_vy / max(base_vx, 1.0)
+            vy = min(settings.BALL_SPIN_CLAMP, self.speed * (ratio / (1.0 + ratio)))
+            vx = max(1e-3, np.sqrt(max(0.0, self.speed * self.speed - vy * vy)))
+            self.vx = dir_x * vx
+            self.vy = dir_y * vy
 
     def update(self, dt):
         dt = max(0.0, float(dt))
@@ -34,17 +55,6 @@ class Ball:
             self.y = settings.SCREEN_HEIGHT - self.radius
             self.vy = -abs(self.vy)
 
-        # aceleracion suave
-        accel = settings.BALL_SPEED_INC * dt
-        self.speed = min(settings.BALL_SPEED_MAX, self.speed + accel)
-
-        # mantener proporcion vx-vy con limites
-        dir_x = np.sign(self.vx) if self.vx != 0 else 1.0
-        dir_y = np.sign(self.vy) if self.vy != 0 else 1.0
-        vy_ratio = np.clip(abs(self.vy) / max(abs(self.vx), 1.0), 0.35, 2.0)
-        self.vx = dir_x * self.speed
-        self.vy = dir_y * min(settings.BALL_SPIN_CLAMP, self.speed * vy_ratio)
-
     def _apply_spin(self, paddle, contact_y):
         rel = ((contact_y - (paddle.y + paddle.height / 2.0)) / (paddle.height / 2.0))
         rel = np.clip(rel, -1.0, 1.0)
@@ -58,18 +68,33 @@ class Ball:
         if self.vx < 0:
             p = ai_paddle
             if (p.x <= self.x - self.radius <= p.x + p.width) and (p.y <= self.y <= p.y + p.height):
+                # reposition outside paddle to avoid double-collision
                 self.x = p.x + p.width + self.radius
-                self.vx = abs(self.vx)
+                # increase speed on hit (discrete increment)
+                self.speed = min(settings.BALL_SPEED_MAX, self.speed + settings.BALL_SPEED_INC)
+                # apply spin based on contact point
                 self._apply_spin(p, self.y)
+                # recompute velocity components preserving direction and proportionality
+                dir_x = 1.0
+                vy_ratio = np.clip(abs(self.vy) / max(abs(self.vx), 1.0), 0.35, 2.0)
+                self.vx = dir_x * self.speed
+                self.vy = np.sign(self.vy) * min(settings.BALL_SPIN_CLAMP, self.speed * vy_ratio)
                 events.append(("hit", self.x, self.y, "ai"))
 
         # colision con paleta Jugador (derecha)
         if self.vx > 0:
             p = player_paddle
             if (p.x <= self.x + self.radius <= p.x + p.width) and (p.y <= self.y <= p.y + p.height):
+                # reposition outside paddle to avoid double-collision
                 self.x = p.x - self.radius
-                self.vx = -abs(self.vx)
+                # increase speed on hit
+                self.speed = min(settings.BALL_SPEED_MAX, self.speed + settings.BALL_SPEED_INC)
+                # apply spin
                 self._apply_spin(p, self.y)
+                dir_x = -1.0
+                vy_ratio = np.clip(abs(self.vy) / max(abs(self.vx), 1.0), 0.35, 2.0)
+                self.vx = dir_x * self.speed
+                self.vy = np.sign(self.vy) * min(settings.BALL_SPIN_CLAMP, self.speed * vy_ratio)
                 events.append(("hit", self.x, self.y, "player"))
 
         return events
@@ -146,6 +171,12 @@ class AIPaddle(Paddle):
             a_cmd = (desired_v - self.v) / dt
             a_cmd = float(np.clip(a_cmd, -max_accel, max_accel))
             self.v += a_cmd * dt
+
+        # small nudge: if error is large but velocity is nearly zero, help break static friction
+        if abs(err) > dead and abs(self.v) < 20.0:
+            # add a small velocity in px/s (not scaled by dt)
+            nudge_v = np.sign(err) * min(0.08 * max_speed, 300.0)
+            self.v += nudge_v
 
         self.y += self.v * dt
         self.clamp()

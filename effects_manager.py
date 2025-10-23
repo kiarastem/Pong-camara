@@ -15,6 +15,10 @@ class EffectsManager:
         self.flashes = []
 
     def spawn_particles(self, x, y, color=(255, 255, 255)):
+        """Spawn particles whose velocities are in px/s (frame-rate independent).
+
+        Particles are updated in draw(...) using the dt passed from the main loop.
+        """
         count = int(getattr(settings, "PARTICLE_COUNT", 12))
         life = float(getattr(settings, "PARTICLE_LIFE", 0.45))
         speed_min = float(getattr(settings, "PARTICLE_SPEED_MIN", 160.0))
@@ -22,13 +26,14 @@ class EffectsManager:
         now = time.time()
         for _ in range(count):
             angle = self.rng.uniform(0.0, 2.0 * np.pi)
-            speed = self.rng.uniform(speed_min, speed_max) / 60.0
+            # speed in px/s
+            speed = self.rng.uniform(speed_min, speed_max)
             self.particles.append(
                 {
                     "x": float(x),
                     "y": float(y),
-                    "vx": np.cos(angle) * speed,
-                    "vy": np.sin(angle) * speed,
+                    "vx": float(np.cos(angle) * speed),
+                    "vy": float(np.sin(angle) * speed),
                     "t": now,
                     "life": life,
                     "color": tuple(int(c) for c in color),
@@ -48,15 +53,16 @@ class EffectsManager:
             }
         )
 
-    def _draw_particles(self, frame):
+    def _draw_particles(self, frame, dt):
         now = time.time()
         survivors = []
         for p in self.particles:
             age = now - p["t"]
             if age > p["life"]:
                 continue
-            p["x"] += p["vx"]
-            p["y"] += p["vy"]
+            # dt in seconds -> move by vx*dt
+            p["x"] += p["vx"] * float(dt)
+            p["y"] += p["vy"] * float(dt)
             alpha = max(0.0, 1.0 - age / p["life"])
             color = tuple(int(c * alpha) for c in p["color"])
             cv2.circle(frame, (int(p["x"]), int(p["y"])), 3, color, -1)
@@ -84,6 +90,7 @@ class EffectsManager:
             survivors.append(f)
         self.flashes = survivors
 
-    def draw(self, frame):
-        self._draw_particles(frame)
+    def draw(self, frame, dt=1.0 / 60.0):
+        """Draw and update effects. Pass dt (seconds) from the main loop for frame-rate independence."""
+        self._draw_particles(frame, dt)
         self._draw_flashes(frame)

@@ -1,118 +1,124 @@
-# Hand Pong - Juego educativo con camara y IA (ASCII)
+# Hand Pong — Juego educativo con cámara y IA (versión profesional)
 
-Resumen
--------
-Hand Pong es una reinterpretacion educativa del clasico Pong que convierte la camara en un sensor de entrada:
-el jugador controla la paleta derecha con su mano (MediaPipe Hands) y una IA "humanizada" controla la paleta izquierda.
-El proposito es mostrar en vivo los tres componentes basicos de un sistema inteligente:
-- Percepcion (la camara y el esqueleto de la mano)
-- Decision (la IA predice donde la pelota impactara)
-- Adaptacion / aprendizaje simulado (la IA mejora su habilidad segun tiempo y marcador)
+Resumen ejecutivo
+-----------------
+Hand Pong transforma el clásico Pong en una herramienta pedagógica para visualizar, en tiempo real, los tres bloques esenciales de un sistema inteligente: percepción (la cámara y el esqueleto de la mano), decisión (predicción de trayectoria) y adaptación (mejora simulada de la IA). Está pensado para ferias, talleres STEM y clases donde se exploran visión por computador, control y conceptos básicos de IA.
 
-Caracteristicas principales
----------------------------
-- Control por mano usando MediaPipe con fallback seguro si MediaPipe no esta disponible.
-- IA que simula latencia, jitter, saccades y probabilidad de fallo, y que mejora progresivamente.
-- Fisica de pelota con spin dependiente del punto de impacto y incremento acotado de velocidad.
-- Control PD para paleta IA con deadband, limite de aceleracion y velocidad maxima dinamica.
-- HUD educativo con telemetria (velocidad de pelota, latencia IA, probabilidad de fallo, decision_hz).
-- Efectos visuales: anillos de impacto, flashes y particulas.
-- Modo fullscreen 1920x1080 por defecto (configurable).
-
-Instalacion rapida
-------------------
-1. Recomendado: Python 3.11
-2. Crear y activar entorno virtual:
-   - linux/mac: python -m venv .venv && source .venv/bin/activate
-   - windows: python -m venv .venv && .venv\\Scripts\\activate
-3. Instalar dependencias:
-   - pip install -r requirements.txt
-4. Ejecutar demo:
-   - python main.py
-
-Requisitos
-----------
-Ver `requirements.txt` para versiones especificas. Principales dependencias:
-- numpy
-- opencv-python
-- mediapipe==0.10.14
-- protobuf<5
-
-Controles (teclado)
+Estado del proyecto
 -------------------
+- Lenguaje: Python 3.11 (recomendado)
+- Resolución objetivo: 1920×1080 (fullscreen configurable)
+- Dependencias clave: numpy, opencv-python, mediapipe==0.10.14, protobuf<5
+- Rama de trabajo con estas mejoras: `improve/hand-skeleton`
+
+Características principales
+--------------------------
+- Control por mano (paleta derecha) mediante MediaPipe Hands con filtrado EMA, deadzone y fallback seguro.
+- Oponente controlado por un modelo que simula comportamiento humano (latencia, jitter, saccades, probabilidad de fallo) y que mejora progresivamente durante la ronda (AISkillManager).
+- Control PD en la paleta IA con deadband, límite de aceleración y velocidad máxima dinámica para evitar vibraciones.
+- Física de la pelota con spin dependiente del punto de impacto, incremento acotado de velocidad y corrección de solapamiento para evitar colisiones dobles.
+- HUD educativo: telemetría en pantalla (velocidad de la pelota, latencia IA, p_miss, decision_hz), panel inferior con explicaciones, ticker de tips y overlay de parámetros tunables en vivo.
+- Efectos visuales (anillos de impacto, flashes de paleta, partículas) con integración dependiente de dt.
+- Control en tiempo real y herramientas de tuning (teclas para ajustar parámetros durante la demo).
+- Visualización del esqueleto de la mano (toggle) para explicar percepción.
+
+Instalación (rápida)
+--------------------
+1. Clonar el repositorio:
+   git clone https://github.com/kiarastem/Pong-camara.git
+2. Crear y activar entorno virtual:
+   python -m venv .venv
+   - Linux/mac: source .venv/bin/activate
+   - Windows: .venv\Scripts\activate
+3. Instalar dependencias:
+   pip install -r requirements.txt
+4. Ejecutar:
+   python main.py
+
+Controles y tuning en vivo
+--------------------------
 - ESC : salir
 - R   : reiniciar marcador y ronda
-- ESPACIO / I : toggle panel educativo inferior
-- H   : toggle HUD de telemetria
-- K   : toggle dibujo del esqueleto de la mano (mostrar percepcion en vivo)
+- ESPACIO / I : alternar panel educativo (inferior)
+- H   : alternar mini-HUD de telemetría
+- K   : alternar dibujo del esqueleto de la mano (MediaPipe)
 - P   : pausa / reanudar
 - S   : forzar saque
-- Q / A : aumentar / disminuir AI_DEADBAND_PX (tuning en vivo)
-- W / S : aumentar / disminuir AI_D_GAIN (tuning en vivo)
-- E / D : aumentar / disminuir BALL_SPEED_INC (tuning en vivo)
-- Z / X : aumentar / disminuir HAND_EMA_ALPHA (tuning en vivo)
+- Q / A : aumentar / disminuir AI_DEADBAND_PX (ajuste fino)
+- W / S : aumentar / disminuir AI_D_GAIN (derivativo)
+- E / D : aumentar / disminuir BALL_SPEED_INC (incremento de velocidad por golpe)
+- Z / X : aumentar / disminuir HAND_EMA_ALPHA (suavizado del seguimiento de la mano)
 
-Concepto pedagogico
--------------------
-Hand Pong fue diseñado para ferias y talleres STEM. Con este proyecto los alumnos pueden:
-- Ver como la camara traduce una mano a coordenadas y como ese dato se suaviza.
-- Observar la prediccion de la IA (linea de prediccion y telemetria).
-- Experimentar con latencia y error modificando parametros.
-- Comprender control PD y la gestion de errores humanos simulados.
+Archivo de configuración (settings.py)
+--------------------------------------
+Todas las constantes de comportamiento están en `settings.py`. Los parámetros más relevantes para demos y talleres:
 
-Archivo de configuracion (settings.py)
--------------------------------------
-Ajusta la experiencia sin tocar la logica:
-- HAND_EMA_ALPHA, HAND_DEADZONE_PX: suavizado y tolerancia del seguimiento de la mano.
-- AI_DEADBAND_PX, AI_D_GAIN, AI_MAX_ACCEL: estabilidad y respuesta de la paleta IA.
-- BALL_SPEED_INC, BALL_SPEED_MAX, BALL_RADIUS: ritmo de juego y visibilidad.
-Consulta `settings.py` para comentarios y rangos recomendados.
+- Percepción:
+  - HAND_EMA_ALPHA: coeficiente EMA (0..1). Valores más bajos = movimiento más suave.
+  - HAND_DEADBAND_PX: zona muerta en pixeles.
+  - SHOW_HAND_SKELETON: mostrar esqueleto por defecto.
 
-Tuning rapido (para la feria)
+- IA:
+  - AI_DEADBAND_PX: zona muerta para la paleta IA.
+  - AI_D_GAIN / AI_P_GAIN: ganancias PD.
+  - AI_MAX_ACCEL: límite de aceleración de la paleta IA.
+  - AI_DECISION_RATE_HZ / AI_LATENCY_MS / AI_MISS_PROB_BASE: control de comportamiento humano.
+
+- Pelota:
+  - BALL_SPEED_INC: incremento por golpe (aditivo).
+  - BALL_SPEED_MAX: velocidad máxima.
+  - BALL_SPIN_FACTOR / BALL_SPIN_CLAMP: control de spin.
+
+Buenas prácticas para la feria
 -----------------------------
-- Hacer la IA mas facil: aumentar AI_DEADBAND_PX, reducir AI_D_GAIN y bajar BALL_SPEED_INC.
-- Hacer la IA mas desafiante: disminuir AI_DEADBAND_PX, aumentar AI_D_GAIN y subir BALL_SPEED_INC.
-- Reducir jitter de la mano: bajar HAND_EMA_ALPHA (hace mas suave) o aumentar HAND_DEADZONE_PX.
+- Calibrar HAND_EMA_ALPHA y HAND_DEADBAND_PX según la cámara y la iluminación del puesto.
+- Mantener ROUND_DURATION_SEC y WINNING_SCORE en valores cortos (ej. 45 s / 5 puntos) para rotación de público.
+- Cerrar aplicaciones que usen la cámara para evitar conflictos.
+- Probar el modo fallback (sin MediaPipe) antes del evento en caso de problemas de instalación.
 
-Modo offline / fallback
------------------------
-Si MediaPipe no esta instalado o falla, el juego continua:
-- La paleta del jugador se mantiene estable (fallback suave hacia el centro).
-- La IA y la fisica siguen funcionando para demostraciones sin sensor.
+Guion pedagógico y usos en clase
+-------------------------------
+Breve guion para presentaciones (frases de ~3-5s):
+1. "La cámara traduce tu mano a una coordenada vertical."
+2. "La IA predice dónde llegará la pelota considerando rebotes."
+3. "La IA simula latencia y comete errores al inicio, como nosotros."
+4. "Con tiempo y presión, la IA adapta su habilidad."
+5. "Cada impacto genera spin y acelera la pelota ligeramente."
+6. "Observa la telemetría: latencia, p_miss y velocidad."
 
-Estructura del codigo
----------------------
-- main.py           : bucle principal, entrada, estado, render y controles.
-- hand_detector.py  : integracion con MediaPipe y filtro EMA para Y de la palma.
-- game_objects.py   : Ball, PlayerPaddle, AIPaddle y logica de colisiones.
-- opponent_model.py : OpponentModel.think(...) devuelve objetivo y telemetria.
-- ui_manager.py     : HUD, panel educativo, countdown y anillos.
-- effects_manager.py: particulas y flashes visuales.
-- settings.py       : parametros y presets para la feria.
-- requirements.txt  : dependencias.
+Actividades didácticas sugeridas
+- Observación guiada del esqueleto de la mano: discutir cómo la percepción se traduce en acción.
+- Experimentos controlados: cambiar latencia o probabilidad de fallo y comparar resultados.
+- Análisis del controlador PD: visualizar overshoot y ajustar ganancias.
+- Extensiones: modo 2 jugadores, registro anónimo de telemetría para análisis académico.
 
-Sugerencias para docentes
--------------------------
-- Antes de la demo, calibrar HAND_EMA_ALPHA y HAND_DEADZONE_PX con la camara usada.
-- Practicar rondas cortas: ROUND_DURATION_SEC = 45s y WINNING_SCORE = 5 funcionan bien para rotacion de publico.
-- En clase, pedir a estudiantes que cambien parametros y observen efectos en telemetria.
+Estructura del repositorio
+--------------------------
+- main.py           — bucle principal, estados y render.
+- hand_detector.py  — MediaPipe + EMA + dibujo de esqueleto.
+- game_objects.py   — Ball, PlayerPaddle, AIPaddle y colisiones.
+- opponent_model.py — OpponentModel con think(...) y set_skill(...).
+- ui_manager.py     — HUD, panel educativo, countdown y rings.
+- effects_manager.py— partículas, flashes y efectos.
+- settings.py       — parámetros y presets.
+- requirements.txt  — dependencias.
 
-Problemas comunes y soluciones
------------------------------
-- No detecta la camara: comprobar `cap.isOpened()` y que ninguna otra app use la camara.
-- Errores de MediaPipe / protobuf: usar Python 3.11 con mediapipe==0.10.14 y protobuf<5.
-- FPS bajos: reducir BG_BLUR_SCALE en settings.py y disminuir PARTICLE_COUNT.
+Desarrollo y contribuciones
+---------------------------
+- Abrir issues para reportar bugs o solicitar features (modos pedagógicos, perfiles de dificultad).
+- Pull requests con tests ligeros (simulaciones headless) serán bienvenidos.
+- Se sugiere incluir ejemplos de configuración y guiones didácticos en `docs/education.md`.
 
-Proxima tarea sugerida
-----------------------
-- Ejecutar pruebas unitarias headless para OpponentModel y PD controller.
-- Añadir un documento `docs/education.md` con el guion pedagogico y actividades de aula.
-- Preparar un branch para perfiles de dificultad predefinidos (kid/normal/pro).
+Problemas frecuentes y soluciones rápidas
+----------------------------------------
+- La cámara no se abre: comprobar que `cap.isOpened()` y que la cámara no esté siendo usada por otra app.
+- Errores de MediaPipe/protobuf: usar Python 3.11 con mediapipe==0.10.14 y protobuf<5.
+- FPS bajos: reducir `BG_BLUR_SCALE` y `PARTICLE_COUNT` en `settings.py`.
 
 Licencia y uso
 --------------
-Proyecto pensado para propósitos educativos y demostraciones en ferias.
-Ajusta `settings.py` para adaptar la dificultad y narrativa pedagogica.
+Proyecto orientado a la educación y demostraciones públicas. Ajustar `settings.py` y los textos pedagógicos para el público objetivo. Consultar al responsable del puesto para la política de uso en eventos.
 
-----------------
+Contacto
+--------
 Repositorio: https://github.com/kiarastem/Pong-camara
