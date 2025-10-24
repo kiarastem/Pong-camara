@@ -1,325 +1,342 @@
-# main.py
-# Hand Pong — version educativa con menu, panel y camara visible (ASCII)
+# main.py - Hand Pong en espanol ASCII con IA "tonta" al inicio y panel simplificado
 
 import cv2
 import time
+import math
 import numpy as np
-import ctypes
 
 import settings
-from ai_strategy import OpponentModel
 from hand_detector import HandDetector
 from game_objects import PlayerPaddle, AIPaddle, Ball
-from ui_manager import UIManager
+from ai_strategy import OpponentAI
 
-
-# ---------------- Utilidades ventana/camara ----------------
-
-def detect_display_resolution():
-    """Obtiene la resolucion del monitor para adaptar el modo pantalla completa."""
-    try:
-        user32 = ctypes.windll.user32
-        user32.SetProcessDPIAware()
-        return int(user32.GetSystemMetrics(0)), int(user32.GetSystemMetrics(1))
-    except Exception:
-        return settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
-
-
+# ---------- util ----------
 def fit_fill(frame, w, h):
-    """Ajusta la camara a la resolucion deseada llenando la pantalla."""
     return cv2.resize(frame, (w, h), interpolation=cv2.INTER_LINEAR)
 
+def draw_text(frame, txt, x, y, scale, color, thickness=2, center=False):
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    (tw, th), _ = cv2.getTextSize(txt, font, scale, thickness)
+    if center:
+        x = int(x - tw / 2)
+    cv2.putText(frame, txt, (int(x), int(y)), font, scale, color, thickness, cv2.LINE_AA)
 
-def fit_letterbox(frame, w, h):
-    """Mantiene aspecto con barras (si decidieras usarlo)."""
-    H, W = frame.shape[:2]
-    s = min(w / float(W), h / float(H))
-    nw, nh = int(W * s), int(H * s)
-    img = cv2.resize(frame, (nw, nh), interpolation=cv2.INTER_LINEAR)
-    canvas = np.zeros((h, w, 3), dtype=np.uint8)
-    x0, y0 = (w - nw) // 2, (h - nh) // 2
-    canvas[y0:y0+nh, x0:x0+nw] = img
-    return canvas
+def clamp(v, a, b):
+    return max(a, min(b, v))
 
-
-# ---------------- Efecto de anillos (ligero) ----------------
-
-class HitRing:
-    """Anillo de impacto: se expande y se desvanece (implementacion ligera)."""
-    __slots__ = ("x", "y", "age", "duration", "r0", "r1", "thick0")
-
-    def __init__(self, x, y):
-        self.x = int(x)
-        self.y = int(y)
-        self.age = 0.0
-        self.duration = 0.35
-        self.r0 = 6
-        self.r1 = 90
-        self.thick0 = 3
-
-    def alive(self):
-        return self.age < self.duration
-
-    def update(self, dt):
-        self.age += dt
-
-    def draw(self, frame):
-        t = max(0.0, min(1.0, self.age / self.duration))
-        r = int(self.r0 + (self.r1 - self.r0) * t)
-        thick = max(1, int(self.thick0 * (1.0 - t)))
-        col = (220 - int(160 * t),) * 3
-        cv2.circle(frame, (self.x, self.y), r, col, thick, lineType=cv2.LINE_AA)
-
-
-# ---------------- Aplicacion ----------------
-
+# ---------- app ----------
 class GameApp:
     def __init__(self):
-        # Ventana
-        if settings.AUTO_FULLSCREEN:
-            W, H = detect_display_resolution()
-        else:
-            W, H = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
-        settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT = W, H
+        self.w = settings.SCREEN_WIDTH
+        self.h = settings.SCREEN_HEIGHT
 
         cv2.namedWindow(settings.WINDOW_NAME, cv2.WINDOW_NORMAL)
-        if settings.AUTO_FULLSCREEN:
+        if settings.FULLSCREEN:
             cv2.setWindowProperty(settings.WINDOW_NAME, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
         else:
-            cv2.resizeWindow(settings.WINDOW_NAME, W, H)
+            cv2.resizeWindow(settings.WINDOW_NAME, self.w, self.h)
+        self.window_name = settings.WINDOW_NAME
 
-        # Camara rapida
-        self.cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, settings.CAMERA_CAPTURE_W)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, settings.CAMERA_CAPTURE_H)
-        self.cap.set(cv2.CAP_PROP_FPS, settings.CAMERA_FPS)
-        try:
-            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # baja latencia
-            self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-        except Exception:
-            pass
-
-        # Sistemas
-        self.ui = UIManager()
-        self.detector = HandDetector()
-        self.opponent = OpponentModel()
+        # Estados
+        self.state = "MENU"  # MENU -> SERVE -> PLAYING -> PAUSED/GAME_OVER
+        self.last_serve = time.time()
+        self.score_p = 0
+        self.score_ai = 0
 
         # Objetos
         margin = 40
-        self.player = PlayerPaddle(W - settings.PADDLE_WIDTH - margin, settings.PADDLE_R_COLOR)
-        self.ai = AIPaddle(margin, settings.PADDLE_L_COLOR)
-        self.ball = Ball()
+        self.player = PlayerPaddle(self.w - settings.PADDLE_WIDTH - margin, settings.PADDLE_R_COLOR)
+        self.ai     = AIPaddle(margin, settings.PADDLE_L_COLOR)
+        self.ball   = Ball()
 
-        # Estado
-        self.state = settings.MENU
-        self.serve_dir = 1
-        self.last_serve_time = 0.0
-        self.score_player = 0
-        self.score_ai = 0
+        # IA
+        self.ai_brain = OpponentAI(self.ai.x)
+
+        # Entrada
+        self.detector = HandDetector()
+        self.input_safe = not getattr(self.detector, "enabled", False)
+        self.y_from_mouse = self.h // 2
+        self.key_up = False
+        self.key_down = False
+        cv2.setMouseCallback(self.window_name, self._on_mouse)
+
+        # Camara
+        self.cap = cv2.VideoCapture(settings.CAMERA_INDEX, cv2.CAP_DSHOW)
+        self.cam_ok = self.cap.isOpened()
+        if self.cam_ok:
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, settings.CAMERA_CAPTURE_W)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, settings.CAMERA_CAPTURE_H)
+            self.cap.set(cv2.CAP_PROP_FPS, settings.CAMERA_FPS)
+            try:
+                self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            except Exception:
+                pass
+
+        # Visuales
         self.show_skeleton = True
-        self.show_edu_panel = False
+        self.show_panel = settings.EDU_PANEL_ENABLED  # ahora arranca en False
 
-        # FX
-        self.hit_rings = []
+        # Telemetria
+        self.last_speed = 0.0
+        self.last_angle_deg = 0.0
 
         # Tiempo
-        self._t_prev = time.time()
+        self.t_prev = time.time()
 
-        print("ESPACIO: jugar/pausar | R: reiniciar | ESC: salir | H: esqueleto | G: pantalla completa | O: panel educativo")
+        print("Controles: ESPACIO iniciar/pausar/continuar | R reiniciar | ESC salir | H esqueleto | E panel | 1/2/3 perfil")
 
-    # ---------------- Bucle principal ----------------
+    # -------- bucle --------
     def run(self):
         while True:
-            ok, frame = self.cap.read()
-            if not ok:
-                break
+            frame = self._grab_frame()
 
-            t_now = time.time()
-            dt = max(0.0, min(0.05, t_now - self._t_prev))
-            self._t_prev = t_now
+            # dt
+            t = time.time()
+            dt = max(0.0, min(0.05, t - self.t_prev))
+            self.t_prev = t
 
-            # Fondo camara
-            frame = cv2.flip(frame, 1)
-            if getattr(settings, "CAMERA_FILL", True):
-                frame = fit_fill(frame, settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT)
-            else:
-                frame = fit_letterbox(frame, settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT)
+            # Mano (si disponible y no en menu)
+            y_norm = None
+            landmarks = None
+            valid = False
+            if not self.input_safe and self.state != "MENU":
+                y_norm, landmarks, valid = self.detector.process(frame)
+                if self.show_skeleton and landmarks is not None:
+                    self.detector.draw_skeleton(frame, landmarks)
 
-            # Mano y esqueleto
-            y_norm, lm, _ = self.detector.process(frame)
-            if self.show_skeleton and lm is not None:
-                self.detector.draw_skeleton(frame, lm)
+            # Respaldo (mouse/teclas) fuera del menu
+            if self.state != "MENU" and (self.input_safe or not valid or y_norm is None):
+                y_px = int(self.y_from_mouse)
+                if self.key_up:   y_px -= int(900 * dt)
+                if self.key_down: y_px += int(900 * dt)
+                y_px = clamp(y_px, 0, self.h)
+                y_norm = y_px / max(1, self.h)
+                self._draw_banner(frame, "Entrada alterna: MOUSE o FLECHAS", (60, 210, 255))
 
-            # ----- ESTADOS -----
-            if self.state == settings.MENU:
-                self.ui.draw_menu(frame, subtitulo="Pong controlado por camara")
-                self._draw_objects(frame)
-
-            elif self.state == settings.SERVE:
-                remain = max(0.0, settings.SERVE_DELAY - (time.time() - self.last_serve_time))
-                self.ui.draw_center_message(frame, "Listo", f"Comienza en {remain:.1f} s")
-                self._draw_objects(frame)
+            # Estados
+            if self.state == "MENU":
+                self._draw_menu(frame)
+            elif self.state == "SERVE":
+                remain = max(0.0, settings.SERVE_DELAY - (time.time() - self.last_serve))
+                self._draw_center(frame, "Listo", 0.9)
+                self._draw_center(frame, f"Saque en {remain:.1f} s", 0.6, dy=60)
                 if remain <= 0.0:
-                    self.state = settings.PLAYING
+                    self.state = "PLAYING"
+            elif self.state == "PLAYING":
+                self._update_game(y_norm, dt)
+            elif self.state == "PAUSED":
+                self._draw_center(frame, "Pausa", 0.9)
+                self._draw_center(frame, "Pulsa ESPACIO para continuar", 0.6, dy=60)
+            elif self.state == "GAME_OVER":
+                msg = "Ganaste" if self.score_p > self.score_ai else "Perdiste"
+                self._draw_center(frame, "Fin del juego", 0.9)
+                self._draw_center(frame, msg, 0.7, dy=60)
+                self._draw_center(frame, "Pulsa ESPACIO para jugar de nuevo", 0.6, dy=110)
 
-            elif self.state == settings.PLAYING:
-                self.update_game(y_norm, dt)
-                self._draw_objects(frame)
+            # Dibujo comun
+            if self.state != "MENU":
+                # IA mas lenta cuando tiene poca skill
+                self.ai.max_speed = int(settings.PADDLE_MAX_SPEED * (0.6 + 0.4 * self.ai_brain.skill))
 
-            elif self.state == settings.PAUSED:
-                self.ui.draw_center_message(frame, "Pausa", "Presiona ESPACIO para continuar")
-                self._draw_objects(frame)
+                self._draw_gameplay(frame)
+                self._draw_center_line(frame)
+                self._draw_score(frame)
+                self._draw_footer(frame)
 
-            elif self.state == settings.GAME_OVER:
-                self.ui.draw_center_message(frame, "Fin del juego", "Presiona R para reiniciar")
-                self._draw_objects(frame)
+                if self.state == "PLAYING" and self.show_panel:
+                    self._draw_edu_panel(frame)
 
-            # ----- HUD -----
-            self.ui.draw_center_line(frame)
-            self.ui.draw_scores(frame, self.score_ai, self.score_player)
-            self.ui.draw_footer_help(frame)
+                if self.state == "PLAYING" and settings.SHOW_PREDICTION and self.ai_brain.pred_y is not None:
+                    x_line = self.ai.x + self.ai.width
+                    cv2.circle(frame, (x_line, int(self.ai_brain.pred_y)), 6, settings.PRED_LINE_COLOR, 2, cv2.LINE_AA)
 
-            # Prediccion y panel educativo
-            if self.state == settings.PLAYING:
-                # Linea de prediccion (si esta disponible)
-                if self.opponent.adv_pred_y is not None:
-                    self.ui.draw_prediction_line(
-                        frame,
-                        (self.ball.x, self.ball.y),
-                        self.opponent.adv_pred_y,
-                        self.ai.x + self.ai.width
-                    )
-                # Panel educativo (tecla O)
-                if self.show_edu_panel:
-                    self.ui.draw_edu_panel(frame, {
-                        "error_rate": self.opponent.err_rate,
-                        "mix": self.opponent.mix,
-                        "adv_pred_y": self.opponent.adv_pred_y,
-                        "ball_y": self.ball.y
-                    })
-
-            # FX
-            self._update_and_draw_rings(frame, dt)
-
-            # Presentacion
-            cv2.imshow(settings.WINDOW_NAME, frame)
+            cv2.imshow(self.window_name, frame)
             if self._handle_keys(cv2.waitKey(1) & 0xFF):
                 break
 
-        self.cap.release()
+        if self.cam_ok:
+            self.cap.release()
         cv2.destroyAllWindows()
 
-    # ---------------- Entradas ----------------
-    def _handle_keys(self, key):
-        if key == 27:  # ESC
-            return True
-        elif key == ord(' '):
-            if self.state in (settings.MENU, settings.GAME_OVER):
-                self._reset_game()
-                self.state = settings.SERVE
-                self.last_serve_time = time.time()
-            elif self.state == settings.PLAYING:
-                self.state = settings.PAUSED
-            elif self.state == settings.PAUSED:
-                self.state = settings.PLAYING
-        elif key == ord('r'):
-            self._reset_game()
-            self.state = settings.SERVE
-            self.last_serve_time = time.time()
-        elif key == ord('h'):
-            self.show_skeleton = not self.show_skeleton
-        elif key == ord('g'):
-            fs = cv2.getWindowProperty(settings.WINDOW_NAME, cv2.WND_PROP_FULLSCREEN)
-            cv2.setWindowProperty(
-                settings.WINDOW_NAME,
-                cv2.WND_PROP_FULLSCREEN,
-                cv2.WINDOW_NORMAL if fs == 1 else cv2.WINDOW_FULLSCREEN
-            )
-        elif key == ord('o'):
-            self.show_edu_panel = not self.show_edu_panel
-        return False
-
-    # ---------------- Logica ----------------
-    def _reset_game(self):
-        self.score_player = 0
-        self.score_ai = 0
-        self.ball.reset(self.serve_dir)
-        self.opponent = OpponentModel()
-        self.hit_rings = []
-
-    def update_game(self, y_norm, dt):
-        # Paleta del jugador via mano
-        y_px = int(y_norm * settings.SCREEN_HEIGHT) if y_norm is not None else None
+    # -------- logica --------
+    def _update_game(self, y_norm, dt):
+        # Jugador
+        y_px = int(y_norm * self.h) if y_norm is not None else None
         self.player.update(y_px, dt)
 
-        # IA hibrida: progresa con las rondas (modo feria)
-        elapsed_min = 0.000001 + (self.score_ai + self.score_player) * 0.2
-        self.opponent.update(
-            elapsed_min=elapsed_min,
-            ball_y=self.ball.y,
-            ball_dir=-1 if self.ball.vx < 0 else 1,
-            paddle_y=self.ai.y,
-            dt=dt,
-            ball=self.ball,
-            ai_paddle=self.ai,
-            player_paddle=self.player
-        )
-        self.ai.update(self.opponent.last_target_y, dt)
+        # IA
+        ai_target = self.ai_brain.decide(self.ball, self.ai.center_y(), dt)
+        self.ai.update(int(ai_target), dt)
 
         # Pelota
         self.ball.update(dt)
 
-        # Colisiones y eventos
-        events = self.ball.check_collisions(self.ai, self.player)
-        for ev in events or []:
-            if ev and ev[0] == "hit":
-                _, bx, by, _side, _power = ev
-                self.hit_rings.append(HitRing(bx, by))
+        # Telemetria
+        vx = float(getattr(self.ball, "vx", 0.0))
+        vy = float(getattr(self.ball, "vy", 0.0))
+        self.last_speed = math.hypot(vx, vy)
+        self.last_angle_deg = math.degrees(math.atan2(vy, vx if abs(vx) > 1e-6 else 1e-6))
+
+        # Colisiones
+        _ = self.ball.check_collisions(self.ai, self.player)
 
         # Goles
         if self.ball.x < 0:
-            self.score_player += 1
+            self.score_p += 1
+            self.ai_brain.learn_on_point_end(player_scored=True, ball_final_y=float(self.ball.y))
             self.ball.reset(direction=-1)
-            self.state = settings.SERVE
-            self.last_serve_time = time.time()
-        elif self.ball.x > settings.SCREEN_WIDTH:
+            self.state = "SERVE"
+            self.last_serve = time.time()
+        elif self.ball.x > self.w:
             self.score_ai += 1
+            self.ai_brain.learn_on_point_end(player_scored=False, ball_final_y=float(self.ball.y))
             self.ball.reset(direction=1)
-            self.state = settings.SERVE
-            self.last_serve_time = time.time()
+            self.state = "SERVE"
+            self.last_serve = time.time()
 
-        # Fin de partida corta
-        if max(self.score_player, self.score_ai) >= settings.WINNING_SCORE:
-            self.state = settings.GAME_OVER
+        if max(self.score_p, self.score_ai) >= settings.WINNING_SCORE:
+            self.state = "GAME_OVER"
 
-    # ---------------- Dibujo ----------------
-    def _draw_objects(self, frame):
-        # Paleta IA
-        cv2.rectangle(frame,
-                      (self.ai.x, self.ai.y),
+    # -------- entrada --------
+    def _handle_keys(self, key):
+        if key == 27:  # ESC
+            return True
+
+        # cambiar perfil en cualquier estado
+        if key in (ord('1'), ord('2'), ord('3')):
+            settings.BALL_PROFILE = int(chr(key))
+            self.ball.apply_profile_change()
+            print("Perfil activo:", settings.BALL_PROFILES[settings.BALL_PROFILE]["name"])
+
+        # ESPACIO maneja flujo
+        if key == ord(' '):
+            if self.state == "MENU":
+                self._reset_match()
+                self.state = "SERVE"
+                self.last_serve = time.time()
+            elif self.state == "SERVE":
+                self.state = "PLAYING"
+            elif self.state == "PLAYING":
+                self.state = "PAUSED"
+            elif self.state == "PAUSED":
+                self.state = "PLAYING"
+            elif self.state == "GAME_OVER":
+                self._reset_match()
+                self.state = "SERVE"
+                self.last_serve = time.time()
+
+        elif key == ord('r'):
+            self._reset_match()
+            self.state = "SERVE"
+            self.last_serve = time.time()
+        elif key == ord('h'):
+            self.show_skeleton = not self.show_skeleton
+        elif key == ord('e'):
+            self.show_panel = not self.show_panel
+
+        # Flechas / WASD (fuera de menu)
+        if self.state != "MENU":
+            if key in (82, ord('w')):
+                self.key_up, self.key_down = True, False
+            elif key in (84, ord('s')):
+                self.key_up, self.key_down = False, True
+            elif key == 255:
+                pass
+            else:
+                self.key_up = self.key_down = False
+
+        return False
+
+    def _on_mouse(self, event, x, y, flags, param):
+        if event in (cv2.EVENT_MOUSEMOVE, cv2.EVENT_LBUTTONDOWN, cv2.EVENT_LBUTTON_UP):
+            self.y_from_mouse = y
+
+    # -------- frame/camara --------
+    def _grab_frame(self):
+        if self.cam_ok:
+            ok, frame = self.cap.read()
+            if not ok:
+                self.cam_ok = False
+                return np.full((self.h, self.w, 3), 25, dtype=np.uint8)
+            frame = cv2.flip(frame, 1)
+            return fit_fill(frame, self.w, self.h)
+        else:
+            color = 15 if self.state == "MENU" else 25
+            return np.full((self.h, self.w, 3), color, dtype=np.uint8)
+
+    # -------- dibujo --------
+    def _draw_menu(self, frame):
+        nombre = settings.BALL_PROFILES[settings.BALL_PROFILE]["name"]
+        self._draw_center(frame, "Hand Pong", 1.1, dy=-60)
+        draw_text(frame, "Pulsa ESPACIO para iniciar", self.w // 2, int(self.h * 0.55), 0.7, (255, 255, 255), 2, center=True)
+        draw_text(frame, "Controles: mano (si hay camara) o MOUSE / FLECHAS", self.w // 2, int(self.h * 0.64), 0.55, (230, 230, 230), 2, center=True)
+        draw_text(frame, "Velocidad: 1=Lento  2=Normal  3=Rapido", self.w // 2, int(self.h * 0.73), 0.6, (210, 210, 210), 2, center=True)
+        draw_text(frame, f"Perfil actual: {nombre}", self.w // 2, int(self.h * 0.80), 0.65, (255, 255, 255), 2, center=True)
+        draw_text(frame, "E: panel  |  H: esqueleto  |  R: reiniciar  |  ESC: salir", self.w // 2, int(self.h * 0.88), 0.5, (210, 210, 210), 2, center=True)
+
+    def _draw_center(self, frame, text, scale=1.0, dy=0, color=(255, 255, 255)):
+        draw_text(frame, text, self.w // 2, self.h // 2 + dy, scale, color, thickness=2, center=True)
+
+    def _draw_center_line(self, frame):
+        for y in range(0, self.h, 24):
+            cv2.line(frame, (self.w // 2, y), (self.w // 2, y + 12), (255, 255, 255), 2, cv2.LINE_AA)
+
+    def _draw_score(self, frame):
+        s = f"{self.score_ai}   {self.score_p}"
+        draw_text(frame, s, self.w // 2, 60, 1.6, (255, 255, 255), thickness=3, center=True)
+
+    def _draw_footer(self, frame):
+        nombre = settings.BALL_PROFILES[settings.BALL_PROFILE]["name"]
+        footer = f"ESPACIO: iniciar/pausar | R: reiniciar | ESC: salir | H: esqueleto | E: panel | Perfil: {nombre} (1/2/3)"
+        draw_text(frame, footer, 20, self.h - 20, 0.7, (235, 235, 235), thickness=2, center=False)
+
+    def _draw_gameplay(self, frame):
+        cv2.rectangle(frame, (self.ai.x, self.ai.y),
                       (self.ai.x + self.ai.width, self.ai.y + self.ai.height),
                       settings.PADDLE_L_COLOR, -1)
-        # Paleta Jugador
-        cv2.rectangle(frame,
-                      (self.player.x, self.player.y),
+        cv2.rectangle(frame, (self.player.x, self.player.y),
                       (self.player.x + self.player.width, self.player.y + self.player.height),
                       settings.PADDLE_R_COLOR, -1)
-        # Pelota
-        cv2.circle(frame,
-                   (int(self.ball.x), int(self.ball.y)),
-                   settings.BALL_RADIUS, settings.BALL_COLOR, -1, lineType=cv2.LINE_AA)
+        cv2.circle(frame, (int(self.ball.x), int(self.ball.y)), settings.BALL_RADIUS, settings.BALL_COLOR, -1, cv2.LINE_AA)
 
-    def _update_and_draw_rings(self, frame, dt):
-        if not self.hit_rings:
-            return
-        alive = []
-        for r in self.hit_rings:
-            r.update(dt)
-            if r.alive():
-                r.draw(frame)
-                alive.append(r)
-        self.hit_rings = alive
+    def _draw_banner(self, frame, text, color=(60, 210, 255)):
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (0, 0), (self.w, 40), (0, 0, 0), -1)
+        cv2.addWeighted(overlay, 0.55, frame, 0.45, 0, frame)
+        draw_text(frame, text, 16, 28, 0.6, color, 2, center=False)
 
+    def _draw_edu_panel(self, frame):
+        # Panel reducido: Error IA, Exactitud, Prediccion, Aprendizaje
+        pad = settings.EDU_PANEL_PADDING
+        w_panel = int(self.w * settings.EDU_PANEL_WIDTH_FRAC)
+        x0 = self.w - w_panel - pad
+        y0 = pad
+        x1 = self.w - pad
+        y1 = int(self.h * 0.40)
+
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (x0, y0), (x1, y1), (0, 0, 0), -1)
+        cv2.addWeighted(overlay, settings.EDU_PANEL_ALPHA, frame, 1 - settings.EDU_PANEL_ALPHA, 0, frame)
+
+        sx = x0 + 16
+        sy = y0 + 28
+        lh = 26
+        scale = settings.EDU_TEXT_SCALE
+        thick = settings.EDU_TEXT_THICK
+
+        draw_text(frame, "Panel educativo", sx, sy, scale + 0.05, (255, 255, 255), thick); sy += lh * 2
+
+        pred_txt = "n/a" if self.ai_brain.pred_y is None else f"{int(self.ai_brain.pred_y)} px"
+        draw_text(frame, f"Prediccion: {pred_txt}", sx, sy, scale, (200, 255, 200), thick); sy += lh
+        draw_text(frame, f"Exactitud: {self.ai_brain.acc_recent:4.1f} %", sx, sy, scale, (255, 230, 150), thick); sy += lh
+        draw_text(frame, f"Error IA: {self.ai_brain.error_pct:4.1f} %", sx, sy, scale, (255, 180, 180), thick); sy += lh
+        draw_text(frame, f"Aprendizaje: {int(self.ai_brain.skill*100):3d} %", sx, sy, scale, (200, 220, 255), thick); sy += lh
+
+    def _reset_match(self):
+        self.score_p = 0
+        self.score_ai = 0
+        self.ball.reset(direction=1)
 
 if __name__ == "__main__":
     GameApp().run()

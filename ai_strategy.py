@@ -1,62 +1,138 @@
-# ai_strategy.py
-# IA educativa simplificada y progresiva
+# ai_strategy.py - IA con prediccion, aprendizaje y habilidad inicial baja (ASCII)
 
+import math
 import random
-from typing import Optional
-
 import settings
-from opponent_model import OpponentModelAdvanced
 
-
-def _clamp(v, a, b):
+def clamp(v, a, b):
     return max(a, min(b, v))
 
+def reflect_y_at_walls(y, h, r):
+    top = r
+    bot = h - r
+    if bot <= top:
+        return clamp(int(y), 0, h - 1)
+    span = bot - top
+    rel = (y - top) % (2 * span)
+    if rel > span:
+        rel = 2 * span - rel
+    return int(top + rel)
 
-class _SimpleReactive:
-    def __init__(self):
-        self.target_y = settings.SCREEN_HEIGHT / 2.0
-        self.alpha = 0.22
+def predict_ball_y_at_x(x_target, x0, y0, vx, vy, w, h, r):
+    if vx == 0:
+        return None
+    t = (x_target - x0) / vx
+    if t <= 0:
+        return None
+    return reflect_y_at_walls(y0 + vy * t, h, r)
 
-    def compute(self, ball_y: Optional[float], noise_px: float) -> float:
-        if ball_y is None:
-            return self.target_y
-        self.target_y = (1.0 - self.alpha) * self.target_y + self.alpha * float(ball_y)
-        if noise_px > 0.0:
-            self.target_y += random.uniform(-noise_px, noise_px) * 0.35
-        return _clamp(self.target_y, 0.0, float(settings.SCREEN_HEIGHT))
+class OpponentAI:
+    """
+    IA educativa:
+      - Con vx<0 predice el cruce y apunta al objetivo.
+      - Tiene habilidad inicial baja (skill), que mejora con la exactitud reciente.
+      - Introduce sesgo al centro y ruido cuando la skill es baja (mas "tonta").
+    Panel expone: pred_y, target_y, error_pct, acc_recent, skill.
+    """
+    def __init__(self, x_ai):
+        self.x_ai = x_ai
+        self.pred_y = None
+        self.target_y = None
+        self.error_pct = 0.0
 
+        # aprendizaje por bandas
+        self.bins = int(getattr(settings, "AI_LEARN_BINS", 6))
+        self.weak_counts = [0 for _ in range(self.bins)]
+        self.learn_rate = float(getattr(settings, "AI_LEARN_RATE", 0.15))
+        self.hist_window = int(getattr(settings, "AI_HISTORY", 12))
+        self._recent_covers = []  # 1 cubre, 0 falla
+        self.acc_recent = 0.0
 
-class OpponentModel:
-    def __init__(self):
-        self._simple = _SimpleReactive()
-        self._advanced = OpponentModelAdvanced()
-        self.last_target_y = settings.SCREEN_HEIGHT / 2.0
-        self.err_rate = 1.0
-        self.mix = 0.0
-        self.adv_pred_y = None
+        # habilidad inicial (mas baja = mas errores)
+        self.skill = float(getattr(settings, "AI_SKILL_START", 0.35))
 
-        self.switch_min = 1.0
-        self.ramp_min = 1.0
-        self.err_start = 0.45
-        self.err_end = 0.15
-        self.jitter_px = 36.0
+    def _bin_index(self, y, h):
+        y = clamp(int(y), 0, h - 1)
+        band_h = h / float(self.bins)
+        idx = int(y // band_h)
+        return clamp(idx, 0, self.bins - 1)
 
-    def update(self, elapsed_min, ball_y, ball_dir, paddle_y, dt, *, ball=None, ai_paddle=None, player_paddle=None):
-        self.mix = _clamp((elapsed_min - self.switch_min) / self.ramp_min, 0.0, 1.0)
-        err_k = _clamp(elapsed_min / max(1e-6, self.switch_min + self.ramp_min), 0.0, 1.0)
-        self.err_rate = _clamp(self.err_start + (self.err_end - self.err_start) * err_k, 0.0, 1.0)
-        noise_px = self.err_rate * self.jitter_px
+    def _apply_dumbness(self, base_target, h):
+        """
+        Mezcla con centro y agrega ruido segun skill:
+        - skill baja -> mas sesgo al centro y mas ruido.
+        """
+        center = h * 0.5
+        bias = (1.0 - self.skill)  # 0..1
+        noisy = base_target * (1.0 - bias) + center * bias
+        # ruido proporcional a pantalla
+        amp = bias * (h * 0.12)
+        noisy += random.uniform(-amp, amp)
+        # suavizado simple
+        if self.target_y is None:
+            return noisy
+        alpha = 0.35 + 0.45 * self.skill  # mas skill -> reacciona mas rapido
+        return (1.0 - alpha) * float(self.target_y) + alpha * float(noisy)
 
-        y_simple = self._simple.compute(ball_y, noise_px)
+    def decide(self, ball, ai_center_y, dt):
+        w = settings.SCREEN_WIDTH
+        h = settings.SCREEN_HEIGHT
+        r = settings.BALL_RADIUS
+        vx = float(getattr(ball, "vx", 0.0))
+        vy = float(getattr(ball, "vy", 0.0))
 
-        self.adv_pred_y = None
-        if ball is not None and ai_paddle is not None:
-            y_adv = self._advanced.predict_y(ball, ai_paddle, weak_mix=True)
-            self.adv_pred_y = float(y_adv)
-            y_adv = 0.85 * float(y_adv) + 0.15 * y_simple
+        if vx < 0:
+            x_target = self.x_ai + settings.PADDLE_WIDTH
+            self.pred_y = predict_ball_y_at_x(x_target, ball.x, ball.y, vx, vy, w, h, r)
+            base_target = h * 0.5 if self.pred_y is None else float(self.pred_y)
+
+            # sesgo a zonas debiles (opcional, leve)
+            if sum(self.weak_counts) > 0:
+                worst_idx = max(range(self.bins), key=lambda i: self.weak_counts[i])
+                band_h = h / float(self.bins)
+                weak_center = (worst_idx + 0.5) * band_h
+                base_target = (1.0 - self.learn_rate) * base_target + self.learn_rate * weak_center
+
+            # aplicar "torpeza" segun skill
+            self.target_y = self._apply_dumbness(base_target, h)
         else:
-            y_adv = y_simple
+            self.pred_y = None
+            self.target_y = h * 0.5
 
-        self.last_target_y = (1.0 - self.mix) * y_simple + self.mix * y_adv
-        self.last_target_y = _clamp(self.last_target_y, 0.0, float(settings.SCREEN_HEIGHT))
-        return 0.0
+        # error relativo vs prediccion
+        if self.pred_y is not None:
+            err = abs(ai_center_y - self.pred_y)
+            self.error_pct = clamp(err / (settings.PADDLE_HEIGHT * 0.5), 0.0, 2.0) * 100.0
+        else:
+            self.error_pct = 0.0
+
+        return self.target_y
+
+    def learn_on_point_end(self, player_scored: bool, ball_final_y: float):
+        """Actualiza aprendizaje, exactitud y skill al terminar cada punto."""
+        h = settings.SCREEN_HEIGHT
+        if ball_final_y is None:
+            return
+
+        came_to_ai = bool(player_scored)  # si anoto el jugador, fue al lado IA
+
+        if came_to_ai:
+            self._recent_covers.append(0)
+            idx = self._bin_index(ball_final_y, h)
+            self.weak_counts[idx] += 1
+        else:
+            self._recent_covers.append(1)
+
+        if len(self._recent_covers) > self.hist_window:
+            self._recent_covers.pop(0)
+
+        # exactitud reciente
+        if self._recent_covers:
+            self.acc_recent = sum(self._recent_covers) / float(len(self._recent_covers)) * 100.0
+        else:
+            self.acc_recent = 0.0
+
+        # skill sube con la exactitud (limites 0.2..0.95)
+        tgt_skill = 0.2 + 0.75 * (self.acc_recent / 100.0)
+        # suavizado para no saltar bruscamente
+        self.skill = clamp(0.85 * self.skill + 0.15 * tgt_skill, 0.2, 0.95)
