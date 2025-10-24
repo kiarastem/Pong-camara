@@ -1,4 +1,4 @@
-# main.py - Hand Pong en espanol ASCII con IA "tonta" al inicio y panel simplificado
+# main.py - Hand Pong en espanol ASCII con EMA de mano, menu de perfiles y panel opcional
 
 import cv2
 import time
@@ -60,6 +60,9 @@ class GameApp:
         self.key_down = False
         cv2.setMouseCallback(self.window_name, self._on_mouse)
 
+        # Suavizado de mano/mouse (EMA)
+        self.hand_y_ema = self.h // 2
+
         # Camara
         self.cap = cv2.VideoCapture(settings.CAMERA_INDEX, cv2.CAP_DSHOW)
         self.cam_ok = self.cap.isOpened()
@@ -75,7 +78,7 @@ class GameApp:
 
         # Visuales
         self.show_skeleton = True
-        self.show_panel = settings.EDU_PANEL_ENABLED  # ahora arranca en False
+        self.show_panel = settings.EDU_PANEL_ENABLED  # empieza como diga settings (False por defecto)
 
         # Telemetria
         self.last_speed = 0.0
@@ -110,8 +113,16 @@ class GameApp:
                 y_px = int(self.y_from_mouse)
                 if self.key_up:   y_px -= int(900 * dt)
                 if self.key_down: y_px += int(900 * dt)
-                y_px = clamp(y_px, 0, self.h)
-                y_norm = y_px / max(1, self.h)
+
+                # margen seguro para el centro de la paleta
+                margin = settings.PADDLE_HEIGHT // 2 + 6
+                y_px = clamp(y_px, margin, self.h - margin)
+
+                # EMA para que no rebote
+                alpha = float(getattr(settings, "HAND_EMA_ALPHA", 0.28))
+                self.hand_y_ema = int((1.0 - alpha) * self.hand_y_ema + alpha * y_px)
+
+                y_norm = self.hand_y_ema / max(1, self.h)
                 self._draw_banner(frame, "Entrada alterna: MOUSE o FLECHAS", (60, 210, 255))
 
             # Estados
@@ -136,7 +147,7 @@ class GameApp:
 
             # Dibujo comun
             if self.state != "MENU":
-                # IA mas lenta cuando tiene poca skill
+                # IA mas lenta/rapida segun skill (anti-tiriteo se maneja en ai_strategy)
                 self.ai.max_speed = int(settings.PADDLE_MAX_SPEED * (0.6 + 0.4 * self.ai_brain.skill))
 
                 self._draw_gameplay(frame)
@@ -161,8 +172,17 @@ class GameApp:
 
     # -------- logica --------
     def _update_game(self, y_norm, dt):
-        # Jugador
-        y_px = int(y_norm * self.h) if y_norm is not None else None
+        # Jugador (mano con EMA y margen)
+        if y_norm is not None:
+            margin = settings.PADDLE_HEIGHT // 2 + 6
+            raw_y = int(y_norm * self.h)
+            raw_y = clamp(raw_y, margin, self.h - margin)
+            alpha = float(getattr(settings, "HAND_EMA_ALPHA", 0.28))
+            self.hand_y_ema = int((1.0 - alpha) * self.hand_y_ema + alpha * raw_y)
+            y_px = self.hand_y_ema
+        else:
+            y_px = None
+
         self.player.update(y_px, dt)
 
         # IA
@@ -206,6 +226,7 @@ class GameApp:
         # cambiar perfil en cualquier estado
         if key in (ord('1'), ord('2'), ord('3')):
             settings.BALL_PROFILE = int(chr(key))
+            # actualizar limites de la pelota al vuelo
             self.ball.apply_profile_change()
             print("Perfil activo:", settings.BALL_PROFILES[settings.BALL_PROFILE]["name"])
 
@@ -249,7 +270,7 @@ class GameApp:
         return False
 
     def _on_mouse(self, event, x, y, flags, param):
-        if event in (cv2.EVENT_MOUSEMOVE, cv2.EVENT_LBUTTONDOWN, cv2.EVENT_LBUTTON_UP):
+        if event in (cv2.EVENT_MOUSEMOVE, cv2.EVENT_LBUTTONDOWN, cv2.EVENT_LBUTTONUP):
             self.y_from_mouse = y
 
     # -------- frame/camara --------
@@ -307,7 +328,7 @@ class GameApp:
         draw_text(frame, text, 16, 28, 0.6, color, 2, center=False)
 
     def _draw_edu_panel(self, frame):
-        # Panel reducido: Error IA, Exactitud, Prediccion, Aprendizaje
+        # Panel reducido: Prediccion, Exactitud, Error IA, Aprendizaje
         pad = settings.EDU_PANEL_PADDING
         w_panel = int(self.w * settings.EDU_PANEL_WIDTH_FRAC)
         x0 = self.w - w_panel - pad
